@@ -17,9 +17,11 @@
 #define min(x, y) (x < y ? x : y)
 #define max(x, y) (x > y ? x : y)
 
+#define MAX_SCROLL 16
+
 static void render_window(struct grim_window *win) {
-	win->view_source.width = max(min(win->view_source.width, win->output->buffer->width), 0);
-	win->view_source.height = max(min(win->view_source.height, win->output->buffer->height), 0);
+	win->view_source.width = max(min(win->view_source.width, win->output->buffer->width), MAX_SCROLL * win->output->ratio);
+	win->view_source.height = max(min(win->view_source.height, win->output->buffer->height), MAX_SCROLL);
 	win->view_source.x = max(min(win->view_source.x, win->output->buffer->width - win->view_source.width), 0);
 	win->view_source.y = max(min(win->view_source.y, win->output->buffer->height - win->view_source.height), 0);
 
@@ -101,6 +103,7 @@ static void xdg_output_handle_done(void *data,
 	int32_t height = output->geometry.height;
 	apply_output_transform(output->transform, &width, &height);
 	output->logical_scale = (double)width / output->logical_geometry.width;
+	output->ratio = (double)width / (double)height;
 }
 
 static void xdg_output_handle_name(void *data,
@@ -362,14 +365,7 @@ static void pointer_handle_button(void *data, struct wl_pointer *pointer,
 		win->pointer_pressed = button_state == WL_POINTER_BUTTON_STATE_PRESSED;
 	} else if (button == BTN_RIGHT
 		&& button_state == WL_POINTER_BUTTON_STATE_RELEASED) {
-		struct grim_output *output = win->output;
-		win->view_source = (struct grim_boxf) {
-			.x = (double)output->geometry.x,
-			.y = (double)output->geometry.y,
-			.width = (double)output->geometry.width,
-			.height = (double)output->geometry.height,
-		};
-		render_window(win);
+		win->state->n_done = 0;
 	}
 }
 
@@ -380,16 +376,15 @@ static void pointer_handle_axis(void *data, struct wl_pointer *pointer,
 	struct grim_window *win = state->focused;
 
 	double scroll = wl_fixed_to_double(value) * 2;
-	// Conserve ratio while zooming.
-	double ratio = (double)win->output->buffer->width / (double)win->output->buffer->height;
+	double ratio = win->output->ratio;
 
 	// X and Y diff to zoom towards mouse pointer.
 	double dx = win->pointer_x / (double)win->output->logical_geometry.width;
 	double dy = win->pointer_y / (double)win->output->logical_geometry.height;
 
 	if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
-		if (scroll * ratio > win->view_source.width
-			|| scroll > win->view_source.height) return;
+		if (win->view_source.width - scroll * ratio < MAX_SCROLL
+			|| win->view_source.height - scroll < MAX_SCROLL) return;
 
 		win->view_source.x += scroll * ratio * dx;
 		win->view_source.width -= scroll * ratio;
@@ -475,68 +470,17 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 static const char usage[] =
-	"Usage: grim [options...] [output-file]\n"
+	"Usage: wooz [options...]\n"
 	"\n"
-	"  -h              Show help message and quit.\n"
-	"  -s <factor>     Set the output image scale factor. Defaults to the\n"
-	"                  greatest output scale factor.\n"
-	"  -g <geometry>   Set the region to capture.\n"
-	"  -t png|ppm|jpeg Set the output filetype. Defaults to png.\n"
-	"  -q <quality>    Set the JPEG filetype quality 0-100. Defaults to 80.\n"
-	"  -l <level>      Set the PNG filetype compression level 0-9. Defaults to 6.\n"
-	"  -o <output>     Set the output name to capture.\n"
-	"  -c              Include cursors in the screenshot.\n";
+	"  -h              Show help message and quit.\n";
 
 int main(int argc, char *argv[]) {
-	double scale = 1.0;
-	bool use_greatest_scale = true;
-	struct grim_box *geometry = NULL;
-	char *geometry_output = NULL;
-	bool with_cursor = false;
 	int opt;
-	while ((opt = getopt(argc, argv, "hs:g:o:c")) != -1) {
+	while ((opt = getopt(argc, argv, "h")) != -1) {
 		switch (opt) {
 		case 'h':
 			printf("%s", usage);
 			return EXIT_SUCCESS;
-		case 's':
-			use_greatest_scale = false;
-			scale = strtod(optarg, NULL);
-			break;
-		case 'g':;
-			char *geometry_str = NULL;
-			if (strcmp(optarg, "-") == 0) {
-				size_t n = 0;
-				ssize_t nread = getline(&geometry_str, &n, stdin);
-				if (nread < 0) {
-					free(geometry_str);
-					fprintf(stderr, "failed to read a line from stdin\n");
-					return EXIT_FAILURE;
-				}
-
-				if (nread > 0 && geometry_str[nread - 1] == '\n') {
-					geometry_str[nread - 1] = '\0';
-				}
-			} else {
-				geometry_str = strdup(optarg);
-			}
-
-			free(geometry);
-			geometry = calloc(1, sizeof(struct grim_box));
-			if (!parse_box(geometry, geometry_str)) {
-				fprintf(stderr, "invalid geometry\n");
-				return EXIT_FAILURE;
-			}
-
-			free(geometry_str);
-			break;
-		case 'o':
-			free(geometry_output);
-			geometry_output = strdup(optarg);
-			break;
-		case 'c':
-			with_cursor = true;
-			break;
 		default:
 			return EXIT_FAILURE;
 		}
@@ -607,36 +551,11 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	if (geometry_output != NULL) {
-		struct grim_output *output;
-		wl_list_for_each(output, &state.outputs, link) {
-			if (output->name != NULL &&
-					strcmp(output->name, geometry_output) == 0) {
-				geometry = calloc(1, sizeof(struct grim_box));
-				memcpy(geometry, &output->logical_geometry,
-					sizeof(struct grim_box));
-			}
-		}
-
-		if (geometry == NULL) {
-			fprintf(stderr, "unknown output '%s'\n", geometry_output);
-			return EXIT_FAILURE;
-		}
-	}
-
 	size_t n_pending = 0;
 	struct grim_output *output;
 	wl_list_for_each(output, &state.outputs, link) {
-		if (geometry != NULL &&
-				!intersect_box(geometry, &output->logical_geometry)) {
-			continue;
-		}
-		if (use_greatest_scale && output->logical_scale > scale) {
-			scale = output->logical_scale;
-		}
-
 		output->screencopy_frame = zwlr_screencopy_manager_v1_capture_output(
-			state.screencopy_manager, with_cursor, output->wl_output);
+			state.screencopy_manager, false, output->wl_output);
 		zwlr_screencopy_frame_v1_add_listener(output->screencopy_frame,
 			&screencopy_frame_listener, output);
 
@@ -710,7 +629,5 @@ int main(int argc, char *argv[]) {
 	wl_shm_destroy(state.shm);
 	wl_registry_destroy(state.registry);
 	wl_display_disconnect(state.display);
-	free(geometry);
-	free(geometry_output);
 	return EXIT_SUCCESS;
 }

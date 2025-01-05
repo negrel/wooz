@@ -35,6 +35,7 @@ struct grim_output {
 	struct grim_box geometry;
 	enum wl_output_transform transform;
 	int32_t scale;
+	double ratio;
 
 	struct grim_box logical_geometry;
 	double logical_scale; // guessed from the logical size
