@@ -528,6 +528,10 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "compositor doesn't support viewporter\n");
 		return EXIT_FAILURE;
 	}
+	if (state.seat == NULL) {
+		fprintf(stderr, "compositor doesn't support seat\n");
+		return EXIT_FAILURE;
+	}
 	if (wl_list_empty(&state.outputs)) {
 		fprintf(stderr, "no wl_output\n");
 		return EXIT_FAILURE;
@@ -613,10 +617,23 @@ int main(int argc, char *argv[]) {
 	state.n_done = 1;
 	while (state.n_done && wl_display_dispatch(state.display)) { }
 
-	struct grim_output *output_tmp;
-	wl_list_for_each_safe(output, output_tmp, &state.outputs, link) {
+	struct grim_window *win;
+	struct grim_window *window_tmp;
+	wl_list_for_each_safe(win, window_tmp, &state.windows, link) {
+		output = win->output;
+
+		// Free window.
+		wl_list_remove(&win->link);
+		if (win->xdg_toplevel != NULL) xdg_toplevel_destroy(win->xdg_toplevel);
+		if (win->xdg_surface != NULL) xdg_surface_destroy(win->xdg_surface);
+		if (win->viewport != NULL) wp_viewport_destroy(win->viewport);
+		if (win->surface != NULL) wl_surface_destroy(win->surface);
+		free(win);
+
+
+		// Free output.
 		wl_list_remove(&output->link);
-		free(output->name);
+		if (output->name != NULL) free(output->name);
 		if (output->screencopy_frame != NULL) {
 			zwlr_screencopy_frame_v1_destroy(output->screencopy_frame);
 		}
@@ -631,8 +648,16 @@ int main(int argc, char *argv[]) {
 	if (state.xdg_output_manager != NULL) {
 		zxdg_output_manager_v1_destroy(state.xdg_output_manager);
 	}
+	if (state.pointer) {
+		wl_pointer_release(state.pointer);
+	}
+	wl_seat_release(state.seat);
+	xdg_wm_base_destroy(state.shell);
+	wp_viewporter_destroy(state.viewporter);
 	wl_shm_destroy(state.shm);
 	wl_registry_destroy(state.registry);
+	wl_compositor_destroy(state.compositor);
 	wl_display_disconnect(state.display);
+
 	return EXIT_SUCCESS;
 }

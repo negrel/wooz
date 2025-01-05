@@ -51,10 +51,10 @@ struct grim_window {
 	struct grim_output *output;
 	struct wl_list link;
 
-	struct xdg_surface *xdg_surface;
 	struct xdg_toplevel *xdg_toplevel;
-	struct wl_surface *surface;
+	struct xdg_surface *xdg_surface;
 	struct wp_viewport *viewport;
+	struct wl_surface *surface;
 
 	// Viewport source rectangle.
 	struct grim_boxf view_source;
