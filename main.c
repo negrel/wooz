@@ -9,7 +9,6 @@
 #include "output-layout.h"
 
 #include "wlr-screencopy-unstable-v1-protocol.h"
-#include "fractional-scale-v1-protocol.h"
 #include "xdg-output-unstable-v1-protocol.h"
 #include "xdg-shell-protocol.h"
 #include "viewporter-protocol.h"
