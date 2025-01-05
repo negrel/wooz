@@ -11,18 +11,29 @@
         let
           pkgs = import nixpkgs { inherit system; };
           lib = pkgs.lib;
+          buildInputs = with pkgs; [
+            meson
+            pkg-config
+            ninja
+            wayland
+            wayland-protocols
+            wayland-scanner
+            scdoc
+          ];
         in {
+          packages = {
+            default = pkgs.stdenv.mkDerivation {
+              name = "wooz";
+              version = "0.1.0";
+
+              src = ./.;
+
+              buildInputs = buildInputs;
+            };
+          };
           devShells = {
-            default = pkgs.mkShell rec {
-              buildInputs = with pkgs; [
-                meson
-                pkg-config
-                ninja
-                wayland
-                wayland-protocols
-                wayland-scanner
-                scdoc
-              ];
+            default = pkgs.mkShell {
+              buildInputs = buildInputs;
               LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
             };
           };
