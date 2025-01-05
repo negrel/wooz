@@ -1,5 +1,7 @@
 # 🔍 `wooz` A zoom / magnifier utility for wayland compositors.
 
+<video src=".github/videos/demo.mov"></video>
+
 ## Building from source
 
 Install dependencies:
