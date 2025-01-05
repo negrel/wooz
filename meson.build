@@ -14,10 +14,7 @@ add_project_arguments(cc.get_supported_arguments([
 	'-Wundef',
 ]), language: 'c')
 
-png = dependency('libpng')
-jpeg = dependency('libjpeg', required: get_option('jpeg'))
 math = cc.find_library('m')
-pixman = dependency('pixman-1')
 realtime = cc.find_library('rt')
 wayland_client = dependency('wayland-client')
 
@@ -25,7 +22,6 @@ is_le = host_machine.endian() == 'little'
 add_project_arguments([
 	'-D_POSIX_C_SOURCE=200809L',
 	'-DGRIM_LITTLE_ENDIAN=@0@'.format(is_le.to_int()),
-	'-DHAVE_JPEG=@0@'.format(jpeg.found().to_int()),
 ], language: 'c')
 
 subdir('contrib/completions')
@@ -36,23 +32,13 @@ grim_files = [
 	'buffer.c',
 	'main.c',
 	'output-layout.c',
-	'render.c',
-	'write_ppm.c',
-	'write_png.c',
 ]
 
 grim_deps = [
 	math,
-	pixman,
-	png,
 	realtime,
 	wayland_client,
 ]
-
-if jpeg.found()
-	grim_files += ['write_jpg.c']
-	grim_deps += [jpeg]
-endif
 
 executable(
 	'grim',
@@ -65,6 +51,5 @@ executable(
 subdir('doc')
 
 summary({
-	'JPEG': jpeg.found(),
 	'Manual pages': scdoc.found(),
 }, bool_yn: true)

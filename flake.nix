@@ -18,9 +18,6 @@
                 meson
                 pkg-config
                 ninja
-                libpng
-                libjpeg
-                pixman
                 wayland
                 wayland-protocols
                 wayland-scanner

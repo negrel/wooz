@@ -1,27 +1,37 @@
-#include <assert.h>
-#include <errno.h>
-#include <limits.h>
-#include <pixman.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <unistd.h>
-#include <wordexp.h>
+#include <getopt.h>
+#include <linux/input-event-codes.h>
 
 #include "buffer.h"
 #include "grim.h"
 #include "output-layout.h"
-#include "render.h"
-#include "write_ppm.h"
-#if HAVE_JPEG
-#include "write_jpg.h"
-#endif
-#include "write_png.h"
 
 #include "wlr-screencopy-unstable-v1-protocol.h"
+#include "fractional-scale-v1-protocol.h"
 #include "xdg-output-unstable-v1-protocol.h"
+#include "xdg-shell-protocol.h"
+#include "viewporter-protocol.h"
+
+#define min(x, y) (x < y ? x : y)
+#define max(x, y) (x > y ? x : y)
+
+static void render_window(struct grim_window *win) {
+	win->view_source.width = max(min(win->view_source.width, win->output->buffer->width), 0);
+	win->view_source.height = max(min(win->view_source.height, win->output->buffer->height), 0);
+	win->view_source.x = max(min(win->view_source.x, win->output->buffer->width - win->view_source.width), 0);
+	win->view_source.y = max(min(win->view_source.y, win->output->buffer->height - win->view_source.height), 0);
+
+	wp_viewport_set_source(
+		win->viewport,
+		wl_fixed_from_double(win->view_source.x),
+		wl_fixed_from_double(win->view_source.y),
+		wl_fixed_from_double(win->view_source.width),
+		wl_fixed_from_double(win->view_source.height));
+
+	wl_surface_commit(win->surface);
+}
 
 static void screencopy_frame_handle_buffer(void *data,
 		struct zwlr_screencopy_frame_v1 *frame, uint32_t format, uint32_t width,
@@ -151,12 +161,280 @@ static const struct wl_output_listener output_listener = {
 	.scale = output_handle_scale,
 };
 
+static void xdg_wm_base_ping(void *data, struct xdg_wm_base *shell,
+		uint32_t serial)
+{
+	xdg_wm_base_pong(shell, serial);
+}
+
+static const struct xdg_wm_base_listener xdg_wm_base_listener = {
+	.ping = &xdg_wm_base_ping,
+};
+
+static void xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
+	uint32_t serial)
+{
+	struct grim_window *win = data;
+
+	win->is_configured = true;
+	win->is_maximized = win->configure.is_maximized;
+	win->is_fullscreen = win->configure.is_fullscreen;
+	win->is_resizing = win->configure.is_resizing;
+	win->is_tiled_top = win->configure.is_tiled_top;
+	win->is_tiled_bottom = win->configure.is_tiled_bottom;
+	win->is_tiled_left = win->configure.is_tiled_left;
+	win->is_tiled_right = win->configure.is_tiled_right;
+	win->is_tiled = win->is_tiled_top || win->is_tiled_bottom ||
+		win->is_tiled_left || win->is_tiled_right;
+
+	xdg_surface_ack_configure(win->xdg_surface, serial);
+	wl_surface_attach(win->surface, win->output->buffer->wl_buffer, 0, 0);
+
+	if (win->viewport != NULL && win->configure.width != 0
+		&& win->configure.height != 0) {
+		wp_viewport_set_destination(
+			win->viewport,
+			win->configure.width,
+			win->configure.height);
+	}
+	wl_surface_commit(win->surface);
+}
+
+static const struct xdg_surface_listener xdg_surface_listener = {
+    .configure = &xdg_surface_configure,
+};
+
+static void
+xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
+	int32_t width, int32_t height, struct wl_array *states)
+{
+	bool is_activated = false;
+	bool is_fullscreen = false;
+	bool is_maximized = false;
+	bool is_resizing = false;
+	bool is_tiled_top = false;
+	bool is_tiled_bottom = false;
+	bool is_tiled_left = false;
+	bool is_tiled_right = false;
+	bool is_suspended = false;
+
+	enum xdg_toplevel_state *state;
+	wl_array_for_each(state, states) {
+		switch (*state) {
+		case XDG_TOPLEVEL_STATE_MAXIMIZED:    is_maximized = true; break;
+		case XDG_TOPLEVEL_STATE_FULLSCREEN:   is_fullscreen = true; break;
+		case XDG_TOPLEVEL_STATE_RESIZING:     is_resizing = true; break;
+		case XDG_TOPLEVEL_STATE_ACTIVATED:    is_activated = true; break;
+		case XDG_TOPLEVEL_STATE_TILED_LEFT:   is_tiled_left = true; break;
+		case XDG_TOPLEVEL_STATE_TILED_RIGHT:  is_tiled_right = true; break;
+		case XDG_TOPLEVEL_STATE_TILED_TOP:    is_tiled_top = true; break;
+		case XDG_TOPLEVEL_STATE_TILED_BOTTOM: is_tiled_bottom = true; break;
+		case XDG_TOPLEVEL_STATE_SUSPENDED:    is_suspended = true; break;
+		}
+	}
+
+	(void)is_suspended;
+
+	/*
+	 * Changes done here are ignored until the configure event has
+	 * been ack:ed in xdg_surface_configure().
+	 *
+	 * So, just store the config data and apply it later, in
+	 * xdg_surface_configure() after we've ack:ed the event.
+	 */
+	struct grim_window *win = data;
+	win->configure.is_activated = is_activated;
+	win->configure.is_fullscreen = is_fullscreen;
+	win->configure.is_maximized = is_maximized;
+	win->configure.is_resizing = is_resizing;
+	win->configure.is_tiled_top = is_tiled_top;
+	win->configure.is_tiled_bottom = is_tiled_bottom;
+	win->configure.is_tiled_left = is_tiled_left;
+	win->configure.is_tiled_right = is_tiled_right;
+	win->configure.width = width;
+	win->configure.height = height;
+}
+
+static void xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel)
+{
+	struct grim_window *win = data;
+	win->state->n_done = 0;
+}
+
+static void xdg_toplevel_configure_bounds(void *data,
+	struct xdg_toplevel *xdg_toplevel, int32_t width, int32_t height)
+{
+	/* TODO: ensure we don't pick a bigger size */
+}
+
+static void xdg_toplevel_wm_capabilities(void *data,
+	struct xdg_toplevel *xdg_toplevel, struct wl_array *caps)
+{
+	struct grim_window *win = data;
+
+	win->wm_capabilities.maximize = false;
+	win->wm_capabilities.minimize = false;
+	win->wm_capabilities.window_menu = false;
+	win->wm_capabilities.fullscreen = false;
+
+	enum xdg_toplevel_wm_capabilities *cap;
+	wl_array_for_each(cap, caps) {
+		switch (*cap) {
+		case XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE:
+			win->wm_capabilities.maximize = true;
+			break;
+		case XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE:
+			win->wm_capabilities.minimize = true;
+			break;
+		case XDG_TOPLEVEL_WM_CAPABILITIES_WINDOW_MENU:
+			win->wm_capabilities.window_menu = true;
+			break;
+		case XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN:
+			win->wm_capabilities.fullscreen = true;
+			break;
+		}
+	}
+}
+
+static const struct xdg_toplevel_listener xdg_toplevel_listener = {
+	.configure = &xdg_toplevel_configure,
+	.close = &xdg_toplevel_close,
+	.configure_bounds = &xdg_toplevel_configure_bounds,
+	.wm_capabilities = xdg_toplevel_wm_capabilities,
+};
+
+static void pointer_handle_enter(void *data, struct wl_pointer *pointer,
+	uint32_t serial, struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy) {
+	struct grim_state *state = data;
+
+	struct grim_window *window;
+	wl_list_for_each(window, &state->windows, link) {
+		if (window->surface == surface) {
+			window->is_focused = true;
+			state->focused = window;
+			window->pointer_x = wl_fixed_to_double(sx);
+			window->pointer_y = wl_fixed_to_double(sy);
+		} else {
+			window->is_focused = false;
+		}
+	}
+}
+
+static void pointer_handle_leave(void *data, struct wl_pointer *pointer,
+	uint32_t serial, struct wl_surface *surface) {
+	struct grim_state *state = data;
+
+	struct grim_window *window;
+	wl_list_for_each(window, &state->windows, link) {
+		if (window->surface == surface) {
+			window->is_focused = false;
+			break;
+		}
+	}
+}
+
+static void pointer_handle_motion(void *data, struct wl_pointer *pointer,
+	uint32_t time, wl_fixed_t sx, wl_fixed_t sy) {
+	struct grim_state *state = data;
+	struct grim_window *win = state->focused;
+
+	double x = wl_fixed_to_double(sx);
+	double y = wl_fixed_to_double(sy);
+
+	if (win->pointer_pressed) {
+		double dx = x - win->pointer_x;
+		double dy = y - win->pointer_y;
+		win->view_source.x -= dx;
+		win->view_source.y -= dy;
+		render_window(win);
+	}
+
+	win->pointer_x = x;
+	win->pointer_y = y;
+}
+
+static void pointer_handle_button(void *data, struct wl_pointer *pointer,
+	uint32_t serial, uint32_t time, uint32_t button, uint32_t button_state) {
+	struct grim_state *state = data;
+	struct grim_window *win = state->focused;
+
+	if (button == BTN_LEFT) {
+		win->pointer_pressed = button_state == WL_POINTER_BUTTON_STATE_PRESSED;
+	} else if (button == BTN_RIGHT
+		&& button_state == WL_POINTER_BUTTON_STATE_RELEASED) {
+		struct grim_output *output = win->output;
+		win->view_source = (struct grim_boxf) {
+			.x = (double)output->geometry.x,
+			.y = (double)output->geometry.y,
+			.width = (double)output->geometry.width,
+			.height = (double)output->geometry.height,
+		};
+		render_window(win);
+	}
+}
+
+static void pointer_handle_axis(void *data, struct wl_pointer *pointer,
+	uint32_t time, uint32_t axis, wl_fixed_t value) {
+
+	struct grim_state *state = data;
+	struct grim_window *win = state->focused;
+
+	double scroll = wl_fixed_to_double(value) * 2;
+	// Conserve ratio while zooming.
+	double ratio = (double)win->output->buffer->width / (double)win->output->buffer->height;
+
+	// X and Y diff to zoom towards mouse pointer.
+	double dx = win->pointer_x / (double)win->output->logical_geometry.width;
+	double dy = win->pointer_y / (double)win->output->logical_geometry.height;
+
+	if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
+		if (scroll * ratio > win->view_source.width
+			|| scroll > win->view_source.height) return;
+
+		win->view_source.x += scroll * ratio * dx;
+		win->view_source.width -= scroll * ratio;
+		win->view_source.y += scroll * dy;
+		win->view_source.height -= scroll;
+
+		render_window(win);
+	}
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+	.enter = pointer_handle_enter,
+	.leave = pointer_handle_leave,
+	.motion = pointer_handle_motion,
+	.button = pointer_handle_button,
+	.axis = pointer_handle_axis,
+};
+
+static void seat_handle_capabilities(void *data, struct wl_seat *seat,
+	uint32_t capabilities) {
+	struct grim_state *state = data;
+
+	if ((capabilities & WL_SEAT_CAPABILITY_POINTER) != 0) {
+		state->pointer = wl_seat_get_pointer(seat);
+		wl_pointer_add_listener(state->pointer, &pointer_listener, state);
+	} else {
+		if (state->pointer != NULL) {
+			wl_pointer_destroy(state->pointer);
+			state->pointer = NULL;
+		}
+	}
+}
+
+static const struct wl_seat_listener seat_listener = {
+	.capabilities = seat_handle_capabilities,
+};
 
 static void handle_global(void *data, struct wl_registry *registry,
 		uint32_t name, const char *interface, uint32_t version) {
 	struct grim_state *state = data;
 
-	if (strcmp(interface, wl_shm_interface.name) == 0) {
+	if (strcmp(interface, wl_compositor_interface.name) == 0) {
+		state->compositor = wl_registry_bind(registry, name,
+			&wl_compositor_interface, 5);
+	} else if (strcmp(interface, wl_shm_interface.name) == 0) {
 		state->shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
 	} else if (strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
 		uint32_t bind_version = (version > 2) ? 2 : version;
@@ -166,13 +444,23 @@ static void handle_global(void *data, struct wl_registry *registry,
 		struct grim_output *output = calloc(1, sizeof(struct grim_output));
 		output->state = state;
 		output->scale = 1;
-		output->wl_output =  wl_registry_bind(registry, name,
+		output->wl_output = wl_registry_bind(registry, name,
 			&wl_output_interface, 3);
 		wl_output_add_listener(output->wl_output, &output_listener, output);
 		wl_list_insert(&state->outputs, &output->link);
 	} else if (strcmp(interface, zwlr_screencopy_manager_v1_interface.name) == 0) {
 		state->screencopy_manager = wl_registry_bind(registry, name,
 			&zwlr_screencopy_manager_v1_interface, 1);
+	} else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
+		state->shell = wl_registry_bind(registry, name, &xdg_wm_base_interface, 1);
+		xdg_wm_base_add_listener(state->shell, &xdg_wm_base_listener, state);
+	} else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
+		state->viewporter = wl_registry_bind(registry, name,
+			&wp_viewporter_interface, 1);
+	} else if (strcmp(interface, wl_seat_interface.name) == 0) {
+		state->seat = wl_registry_bind(registry, name,
+			&wl_seat_interface, 1);
+		wl_seat_add_listener(state->seat, &seat_listener, state);
 	}
 }
 
@@ -185,128 +473,6 @@ static const struct wl_registry_listener registry_listener = {
 	.global = handle_global,
 	.global_remove = handle_global_remove,
 };
-
-static bool default_filename(char *filename, size_t n, int filetype) {
-	time_t time_epoch = time(NULL);
-	struct tm *time = localtime(&time_epoch);
-	if (time == NULL) {
-		perror("localtime");
-		return false;
-	}
-
-	char *format_str;
-	const char *ext = NULL;
-	switch (filetype) {
-	case GRIM_FILETYPE_PNG:
-		ext = "png";
-		break;
-	case GRIM_FILETYPE_PPM:
-		ext = "ppm";
-		break;
-	case GRIM_FILETYPE_JPEG:
-#if HAVE_JPEG
-		ext = "jpeg";
-		break;
-#else
-		abort();
-#endif
-	}
-	assert(ext != NULL);
-	char tmpstr[32];
-	sprintf(tmpstr, "%%Y%%m%%d_%%Hh%%Mm%%Ss_grim.%s", ext);
-	format_str = tmpstr;
-	if (strftime(filename, n, format_str, time) == 0) {
-		fprintf(stderr, "failed to format datetime with strftime(3)\n");
-		return false;
-	}
-	return true;
-}
-
-static bool path_exists(const char *path) {
-	return path && access(path, R_OK) != -1;
-}
-
-char *get_xdg_pictures_dir(void) {
-	const char *home_dir = getenv("HOME");
-	if (home_dir == NULL) {
-		return NULL;
-	}
-
-	char *config_file;
-	const char user_dirs_file[] = "user-dirs.dirs";
-	const char config_home_fallback[] = ".config";
-	const char *config_home = getenv("XDG_CONFIG_HOME");
-	if (config_home == NULL || config_home[0] == 0) {
-		size_t size = strlen(home_dir) + strlen("/") +
-				strlen(config_home_fallback) + strlen("/") + strlen(user_dirs_file) + 1;
-		config_file = malloc(size);
-		if (config_file == NULL) {
-			return NULL;
-		}
-		snprintf(config_file, size, "%s/%s/%s", home_dir, config_home_fallback, user_dirs_file);
-	} else {
-		size_t size = strlen(config_home) + strlen("/") + strlen(user_dirs_file) + 1;
-		config_file = malloc(size);
-		if (config_file == NULL) {
-			return NULL;
-		}
-		snprintf(config_file, size, "%s/%s", config_home, user_dirs_file);
-	}
-
-	FILE *file = fopen(config_file, "r");
-	free(config_file);
-	if (file == NULL) {
-		return NULL;
-	}
-
-	char *line = NULL;
-	size_t line_size = 0;
-	ssize_t nread;
-	char *pictures_dir = NULL;
-	while ((nread = getline(&line, &line_size, file)) != -1) {
-		if (nread > 0 && line[nread - 1] == '\n') {
-			line[nread - 1] = '\0';
-		}
-
-		if (strlen(line) == 0 || line[0] == '#') {
-			continue;
-		}
-
-		size_t i = 0;
-		while (line[i] == ' ') {
-			i++;
-		}
-		const char prefix[] = "XDG_PICTURES_DIR=";
-		if (strncmp(&line[i], prefix, strlen(prefix)) == 0) {
-			const char *line_remaining = &line[i] + strlen(prefix);
-			wordexp_t p;
-			if (wordexp(line_remaining, &p, WRDE_UNDEF) == 0) {
-				free(pictures_dir);
-				pictures_dir = strdup(p.we_wordv[0]);
-				wordfree(&p);
-			}
-		}
-	}
-	free(line);
-	fclose(file);
-	return pictures_dir;
-}
-
-char *get_output_dir(void) {
-	const char *grim_default_dir = getenv("GRIM_DEFAULT_DIR");
-	if (path_exists(grim_default_dir)) {
-		return strdup(grim_default_dir);
-	}
-
-	char *xdg_fallback_dir = get_xdg_pictures_dir();
-	if (path_exists(xdg_fallback_dir)) {
-		return xdg_fallback_dir;
-	} else {
-		free(xdg_fallback_dir);
-	}
-
-	return strdup(".");
-}
 
 static const char usage[] =
 	"Usage: grim [options...] [output-file]\n"
@@ -326,12 +492,9 @@ int main(int argc, char *argv[]) {
 	bool use_greatest_scale = true;
 	struct grim_box *geometry = NULL;
 	char *geometry_output = NULL;
-	enum grim_filetype output_filetype = GRIM_FILETYPE_PNG;
-	int jpeg_quality = 80;
-	int png_level = 6; // current default png/zlib compression level
 	bool with_cursor = false;
 	int opt;
-	while ((opt = getopt(argc, argv, "hs:g:t:q:l:o:c")) != -1) {
+	while ((opt = getopt(argc, argv, "hs:g:o:c")) != -1) {
 		switch (opt) {
 		case 'h':
 			printf("%s", usage);
@@ -367,59 +530,6 @@ int main(int argc, char *argv[]) {
 
 			free(geometry_str);
 			break;
-		case 't':
-			if (strcmp(optarg, "png") == 0) {
-				output_filetype = GRIM_FILETYPE_PNG;
-			} else if (strcmp(optarg, "ppm") == 0) {
-				output_filetype = GRIM_FILETYPE_PPM;
-			} else if (strcmp(optarg, "jpeg") == 0) {
-#if HAVE_JPEG
-				output_filetype = GRIM_FILETYPE_JPEG;
-#else
-				fprintf(stderr, "jpeg support disabled\n");
-				return EXIT_FAILURE;
-#endif
-			} else {
-				fprintf(stderr, "invalid filetype\n");
-				return EXIT_FAILURE;
-			}
-			break;
-		case 'q':
-			if (output_filetype != GRIM_FILETYPE_JPEG) {
-				fprintf(stderr, "quality is used only for jpeg files\n");
-				return EXIT_FAILURE;
-			} else {
-				char *endptr = NULL;
-				errno = 0;
-				jpeg_quality = strtol(optarg, &endptr, 10);
-				if (*endptr != '\0' || errno) {
-					fprintf(stderr, "quality must be a integer\n");
-					return EXIT_FAILURE;
-				}
-				if (jpeg_quality < 0 || jpeg_quality > 100) {
-					fprintf(stderr, "quality valid values are between 0-100\n");
-					return EXIT_FAILURE;
-				}
-			}
-			break;
-		case 'l':
-			if (output_filetype != GRIM_FILETYPE_PNG) {
-				fprintf(stderr, "compression level is used only for png files\n");
-				return EXIT_FAILURE;
-			} else {
-				char *endptr = NULL;
-				errno = 0;
-				png_level = strtol(optarg, &endptr, 10);
-				if (*endptr != '\0' || errno) {
-					fprintf(stderr, "level must be a integer\n");
-					return EXIT_FAILURE;
-				}
-				if (png_level < 0 || png_level > 9) {
-					fprintf(stderr, "compression level valid values are between 0-9\n");
-					return EXIT_FAILURE;
-				}
-			}
-			break;
 		case 'o':
 			free(geometry_output);
 			geometry_output = strdup(optarg);
@@ -432,35 +542,9 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	const char *output_filename;
-	char *output_filepath;
-	char tmp[64];
-	if (optind >= argc) {
-		if (!default_filename(tmp, sizeof(tmp), output_filetype)) {
-			fprintf(stderr, "failed to generate default filename\n");
-			return EXIT_FAILURE;
-		}
-		output_filename = tmp;
-
-		char *output_dir = get_output_dir();
-		int len = snprintf(NULL, 0, "%s/%s", output_dir, output_filename);
-		if (len < 0) {
-			perror("snprintf failed");
-			return EXIT_FAILURE;
-		}
-		output_filepath = malloc(len + 1);
-		snprintf(output_filepath, len + 1, "%s/%s", output_dir, output_filename);
-		free(output_dir);
-	} else if (optind < argc - 1) {
-		printf("%s", usage);
-		return EXIT_FAILURE;
-	} else {
-		output_filename = argv[optind];
-		output_filepath = strdup(output_filename);
-	}
-
 	struct grim_state state = {0};
 	wl_list_init(&state.outputs);
+	wl_list_init(&state.windows);
 
 	state.display = wl_display_connect(NULL);
 	if (state.display == NULL) {
@@ -475,12 +559,24 @@ int main(int argc, char *argv[]) {
 		return EXIT_FAILURE;
 	}
 
+	if (state.compositor == NULL) {
+		fprintf(stderr, "wl_compositor is missing\n");
+		return EXIT_FAILURE;
+	}
+	if (state.shell == NULL) {
+		fprintf(stderr, "no XDG shell interface\n");
+		return EXIT_FAILURE;
+	}
 	if (state.shm == NULL) {
 		fprintf(stderr, "compositor doesn't support wl_shm\n");
 		return EXIT_FAILURE;
 	}
 	if (state.screencopy_manager == NULL) {
 		fprintf(stderr, "compositor doesn't support wlr-screencopy-unstable-v1\n");
+		return EXIT_FAILURE;
+	}
+	if (state.viewporter == NULL) {
+		fprintf(stderr, "compositor doesn't support viewporter\n");
 		return EXIT_FAILURE;
 	}
 	if (wl_list_empty(&state.outputs)) {
@@ -561,55 +657,37 @@ int main(int argc, char *argv[]) {
 		return EXIT_FAILURE;
 	}
 
-	if (geometry == NULL) {
-		geometry = calloc(1, sizeof(struct grim_box));
-		get_output_layout_extents(&state, geometry);
-	}
-
-	pixman_image_t *image = render(&state, geometry, scale);
-	if (image == NULL) {
-		return EXIT_FAILURE;
-	}
-
-	FILE *file;
-	if (strcmp(output_filename, "-") == 0) {
-		file = stdout;
-	} else {
-		file = fopen(output_filepath, "w");
-		if (!file) {
-			fprintf(stderr, "Failed to open file '%s' for writing: %s\n",
-				output_filepath, strerror(errno));
+	wl_list_for_each(output, &state.outputs, link) {
+		struct grim_window *win = calloc(1, sizeof(struct grim_window));
+		wl_list_insert(&state.windows, &win->link);
+		win->state = &state;
+		win->output = output;
+		win->surface = wl_compositor_create_surface(state.compositor);
+		win->viewport = wp_viewporter_get_viewport(state.viewporter, win->surface);
+		win->view_source = (struct grim_boxf) {
+			.x = (double)output->geometry.x,
+			.y = (double)output->geometry.y,
+			.width = (double)output->geometry.width,
+			.height = (double)output->geometry.height,
+		};
+		if (win->surface == NULL) {
+			fprintf(stderr, "failed to create wayland surface\n");
 			return EXIT_FAILURE;
 		}
+
+		win->xdg_surface = xdg_wm_base_get_xdg_surface(state.shell, win->surface);
+		xdg_surface_add_listener(win->xdg_surface, &xdg_surface_listener, win);
+		win->xdg_toplevel = xdg_surface_get_toplevel(win->xdg_surface);
+		xdg_toplevel_add_listener(win->xdg_toplevel, &xdg_toplevel_listener, win);
+		xdg_toplevel_set_app_id(win->xdg_toplevel, "dev.negrel.wooz");
+		xdg_toplevel_set_title(win->xdg_toplevel, "wooz");
+		xdg_toplevel_set_fullscreen(win->xdg_toplevel, output->wl_output);
+
+		wl_surface_commit(win->surface);
 	}
 
-	int ret = 0;
-	switch (output_filetype) {
-	case GRIM_FILETYPE_PPM:
-		ret = write_to_ppm_stream(image, file);
-		break;
-	case GRIM_FILETYPE_PNG:
-		ret = write_to_png_stream(image, file, png_level);
-		break;
-	case GRIM_FILETYPE_JPEG:
-#if HAVE_JPEG
-		ret = write_to_jpeg_stream(image, file, jpeg_quality);
-		break;
-#else
-		abort();
-#endif
-	}
-	if (ret == -1) {
-		// Error messages will be printed at the source
-		return EXIT_FAILURE;
-	}
-
-	if (strcmp(output_filename, "-") != 0) {
-		fclose(file);
-	}
-
-	free(output_filepath);
-	pixman_image_unref(image);
+	state.n_done = 1;
+	while (state.n_done && wl_display_dispatch(state.display)) { }
 
 	struct grim_output *output_tmp;
 	wl_list_for_each_safe(output, output_tmp, &state.outputs, link) {
