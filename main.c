@@ -345,8 +345,11 @@ static void pointer_handle_motion(void *data, struct wl_pointer *pointer,
 	double y = wl_fixed_to_double(sy);
 
 	if (win->pointer_pressed) {
-		double dx = x - win->pointer_x;
-		double dy = y - win->pointer_y;
+		double scale = win->view_source.width / win->output->logical_geometry.width;
+
+		double dx = (x - win->pointer_x) * scale;
+		double dy = (y - win->pointer_y) * scale;
+
 		win->view_source.x -= dx;
 		win->view_source.y -= dy;
 		render_window(win);
@@ -375,7 +378,9 @@ static void pointer_handle_axis(void *data, struct wl_pointer *pointer,
 	struct grim_state *state = data;
 	struct grim_window *win = state->focused;
 
-	double scroll = wl_fixed_to_double(value) * 2;
+	double scale = win->view_source.width / win->output->geometry.width;
+	// x10 for faster zoom.
+	double scroll = wl_fixed_to_double(value) * scale * 10;
 	double ratio = win->output->ratio;
 
 	// X and Y diff to zoom towards mouse pointer.
