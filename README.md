@@ -1,6 +1,12 @@
-# 🔍 `wooz` A zoom / magnifier utility for wayland compositors.
+# 🔍 `wooz` - A zoom / magnifier utility for wayland compositors.
 
-<video src=".github/videos/demo.mov"></video>
+https://github.com/user-attachments/assets/23e9aeac-4f60-47e6-9c49-7a3706bcdbe9
+
+Scroll with your mouse to zoom and use left mouse click and drag to move the
+viewport.
+
+Use right click to exit.
+
 
 ## Building from source
 
@@ -8,7 +14,7 @@ Install dependencies:
 
 * meson (build)
 * ninja (build)
-* wayland
+* wayland (viewporter, XDG shell, wlr screencopy and core protocols)
 
 Then run:
 
@@ -18,7 +24,7 @@ meson build
 ninja -C build
 ```
 
-To run directly, use `build/grim`, or if you would like to do a system
+To run directly, use `build/wooz`, or if you would like to do a system
 installation (in `/usr/local` by default), run `ninja -C build install`.
 
 ## Contributing
