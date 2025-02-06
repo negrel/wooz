@@ -14,6 +14,7 @@ Install dependencies:
 
 * meson (build)
 * ninja (build)
+* cmake (build)
 * wayland (viewporter, XDG shell, wlr screencopy and core protocols)
 
 Then run:
