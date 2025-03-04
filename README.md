@@ -29,10 +29,10 @@ installation (in `/usr/local` by default), run `ninja -C build install`.
 
 ## Contributing
 
-If you want to contribute to `allelua` to add a feature or improve the code contact
+If you want to contribute to `wooz` to add a feature or improve the code contact
 me at [alexandre@negrel.dev](mailto:alexandre@negrel.dev), open an
-[issue](https://github.com/negrel/allelua/issues) or make a
-[pull request](https://github.com/negrel/allelua/pulls).
+[issue](https://github.com/negrel/wooz/issues) or make a
+[pull request](https://github.com/negrel/wooz/pulls).
 
 ## :stars: Show your support
 
