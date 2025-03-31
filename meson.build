@@ -24,7 +24,6 @@ add_project_arguments([
 	'-DGRIM_LITTLE_ENDIAN=@0@'.format(is_le.to_int()),
 ], language: 'c')
 
-subdir('contrib/completions')
 subdir('protocol')
 
 grim_files = [
@@ -47,9 +46,3 @@ executable(
 	include_directories: 'include',
 	install: true,
 )
-
-subdir('doc')
-
-summary({
-	'Manual pages': scdoc.found(),
-}, bool_yn: true)

@@ -18,7 +18,6 @@
             wayland
             wayland-protocols
             wayland-scanner
-            scdoc
           ];
         in {
           packages = {
