@@ -47,9 +47,3 @@ executable(
 	include_directories: 'include',
 	install: true,
 )
-
-subdir('doc')
-
-summary({
-	'Manual pages': scdoc.found(),
-}, bool_yn: true)
