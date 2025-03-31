@@ -1,1 +1,0 @@
-option('jpeg', type: 'feature', value: 'auto', description: 'Enable JPEG support')
