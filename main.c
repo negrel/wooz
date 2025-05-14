@@ -232,6 +232,7 @@ xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
 		case XDG_TOPLEVEL_STATE_TILED_TOP:    is_tiled_top = true; break;
 		case XDG_TOPLEVEL_STATE_TILED_BOTTOM: is_tiled_bottom = true; break;
 		case XDG_TOPLEVEL_STATE_SUSPENDED:    is_suspended = true; break;
+		default:                              break;
 		}
 	}
 
