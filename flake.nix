@@ -4,10 +4,12 @@
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   };
 
-  outputs = { nixpkgs, flake-utils, ... }:
+  outputs =
+    { nixpkgs, flake-utils, ... }:
     let
       outputsWithoutSystem = { };
-      outputsWithSystem = flake-utils.lib.eachDefaultSystem (system:
+      outputsWithSystem = flake-utils.lib.eachDefaultSystem (
+        system:
         let
           pkgs = import nixpkgs { inherit system; };
           lib = pkgs.lib;
@@ -19,7 +21,8 @@
             wayland-protocols
             wayland-scanner
           ];
-        in {
+        in
+        {
           packages = {
             default = pkgs.stdenv.mkDerivation {
               name = "wooz";
@@ -32,10 +35,12 @@
           };
           devShells = {
             default = pkgs.mkShell {
-              buildInputs = buildInputs;
+              buildInputs = with pkgs; [ clang-tools ] ++ buildInputs;
               LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
             };
           };
-        });
-    in outputsWithSystem // outputsWithoutSystem;
+        }
+      );
+    in
+    outputsWithSystem // outputsWithoutSystem;
 }

@@ -21,19 +21,18 @@ wayland_client = dependency('wayland-client')
 is_le = host_machine.endian() == 'little'
 add_project_arguments([
 	'-D_POSIX_C_SOURCE=200809L',
-	'-DGRIM_LITTLE_ENDIAN=@0@'.format(is_le.to_int()),
+	'-DWOOZ_LITTLE_ENDIAN=@0@'.format(is_le.to_int()),
 ], language: 'c')
 
 subdir('protocol')
 
-grim_files = [
-	'box.c',
+wooz_files = [
 	'buffer.c',
 	'main.c',
 	'output-layout.c',
 ]
 
-grim_deps = [
+wooz_deps = [
 	math,
 	realtime,
 	wayland_client,
@@ -41,8 +40,8 @@ grim_deps = [
 
 executable(
 	'wooz',
-	[files(grim_files), protocols_src],
-	dependencies: grim_deps,
+	[files(wooz_files), protocols_src],
+	dependencies: wooz_deps,
 	include_directories: 'include',
 	install: true,
 )

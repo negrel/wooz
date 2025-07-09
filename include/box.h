@@ -4,18 +4,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-struct grim_box {
-	int32_t x, y;
-	int32_t width, height;
+/**
+ * Box define a rectangle.
+ */
+struct wooz_box {
+  int32_t x, y;
+  int32_t width, height;
 };
 
-bool parse_box(struct grim_box *box, const char *str);
-bool is_empty_box(struct grim_box *box);
-bool intersect_box(struct grim_box *a, struct grim_box *b);
-
-struct grim_boxf {
-	double x, y;
-	double width, height;
+struct wooz_boxf {
+  double x, y;
+  double width, height;
 };
 
 #endif
