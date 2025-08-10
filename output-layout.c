@@ -34,12 +34,23 @@ void get_output_layout_extents(struct wooz_state *state, struct wooz_box *box) {
   box->height = y2 - y1;
 }
 
-void apply_output_transform(enum wl_output_transform transform, int32_t *width,
-                            int32_t *height) {
+static inline void swap_ptr(void **s, void **d) {
+  void *t = *s;
+  *s = *d;
+  *d = t;
+}
+
+void apply_buffer_transform(enum wl_output_transform transform,
+                            struct wooz_buffer *buffer) {
   if (transform & WL_OUTPUT_TRANSFORM_90) {
-    int32_t tmp = *width;
-    *width = *height;
-    *height = tmp;
+    swap_ptr((void **)&buffer->width, (void **)&buffer->height);
+  }
+}
+
+void apply_geometry_transform(enum wl_output_transform transform,
+                              struct wooz_box *geometry) {
+  if (transform & WL_OUTPUT_TRANSFORM_90) {
+    swap_ptr((void **)&geometry->width, (void **)&geometry->height);
   }
 }
 
@@ -64,7 +75,6 @@ void guess_output_logical_geometry(struct wooz_output *output) {
   output->logical_geometry.y = output->geometry.y;
   output->logical_geometry.width = output->geometry.width / output->scale;
   output->logical_geometry.height = output->geometry.height / output->scale;
-  apply_output_transform(output->transform, &output->logical_geometry.width,
-                         &output->logical_geometry.height);
+  apply_geometry_transform(output->transform, &output->geometry);
   output->logical_scale = output->scale;
 }
