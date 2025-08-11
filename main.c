@@ -52,7 +52,12 @@ static void screencopy_frame_handle_buffer(
     exit(EXIT_FAILURE);
   }
 
-  apply_buffer_transform(output->transform, output->buffer);
+  if (output->transform & WL_OUTPUT_TRANSFORM_90) {
+	  int32_t tmp = output->buffer->width;
+	  output->buffer->width = output->buffer->height;
+	  output->buffer->height = tmp;
+  }
+
   zwlr_screencopy_frame_v1_copy(frame, output->buffer->wl_buffer);
 }
 
