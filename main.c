@@ -52,6 +52,12 @@ static void screencopy_frame_handle_buffer(
     exit(EXIT_FAILURE);
   }
 
+  if (output->transform & WL_OUTPUT_TRANSFORM_90) {
+	  int32_t tmp = output->buffer->width;
+	  output->buffer->width = output->buffer->height;
+	  output->buffer->height = tmp;
+  }
+
   zwlr_screencopy_frame_v1_copy(frame, output->buffer->wl_buffer);
 }
 
@@ -107,10 +113,9 @@ static void xdg_output_handle_done(void *data,
 
   // Guess the output scale from the logical size
   int32_t width = output->geometry.width;
-  int32_t height = output->geometry.height;
-  apply_output_transform(output->transform, &width, &height);
   output->logical_scale = (double)width / output->logical_geometry.width;
-  output->ratio = (double)width / (double)height;
+  output->ratio = (double)output->logical_geometry.width /
+                  (double)output->logical_geometry.height;
 }
 
 static void xdg_output_handle_name(void *data,
@@ -152,8 +157,8 @@ static void output_handle_mode(void *data, struct wl_output *wl_output,
   struct wooz_output *output = data;
 
   if ((flags & WL_OUTPUT_MODE_CURRENT) != 0) {
-    output->geometry.width = width;
-    output->geometry.height = height;
+    output->geometry.width = output->transform ? height : width;
+    output->geometry.height = output->transform ? width : height;
   }
 }
 
@@ -187,6 +192,7 @@ static void xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
                                   uint32_t serial) {
   struct wooz_window *win = data;
 
+  wl_surface_set_buffer_transform(win->surface, win->output->transform);
   win->is_configured = true;
   win->is_maximized = win->configure.is_maximized;
   win->is_fullscreen = win->configure.is_fullscreen;

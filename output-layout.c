@@ -2,7 +2,6 @@
 #include <math.h>
 
 #include "output-layout.h"
-#include "wooz.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -34,15 +33,6 @@ void get_output_layout_extents(struct wooz_state *state, struct wooz_box *box) {
   box->height = y2 - y1;
 }
 
-void apply_output_transform(enum wl_output_transform transform, int32_t *width,
-                            int32_t *height) {
-  if (transform & WL_OUTPUT_TRANSFORM_90) {
-    int32_t tmp = *width;
-    *width = *height;
-    *height = tmp;
-  }
-}
-
 double get_output_rotation(enum wl_output_transform transform) {
   switch (transform & ~WL_OUTPUT_TRANSFORM_FLIPPED) {
   case WL_OUTPUT_TRANSFORM_90:
@@ -62,9 +52,12 @@ int get_output_flipped(enum wl_output_transform transform) {
 void guess_output_logical_geometry(struct wooz_output *output) {
   output->logical_geometry.x = output->geometry.x;
   output->logical_geometry.y = output->geometry.y;
+  if (output->transform & WL_OUTPUT_TRANSFORM_90) {
+	  int32_t tmp = output->geometry.width;
+	  output->geometry.width = output->geometry.height;
+	  output->geometry.height = tmp;
+  }
   output->logical_geometry.width = output->geometry.width / output->scale;
   output->logical_geometry.height = output->geometry.height / output->scale;
-  apply_output_transform(output->transform, &output->logical_geometry.width,
-                         &output->logical_geometry.height);
   output->logical_scale = output->scale;
 }
