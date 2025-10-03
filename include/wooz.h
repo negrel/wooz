@@ -1,9 +1,18 @@
 #ifndef _WOOZ_H
 #define _WOOZ_H
 
+#include <stdbool.h>
+#include <stdint.h>
+#include <time.h>
 #include <wayland-client.h>
 
 #include "box.h"
+
+struct wooz_config {
+  uint32_t close_key; // Linux input event code for close action (0 = default Esc)
+  bool mouse_track;   // Enable mouse tracking
+  double initial_zoom; // Initial zoom percentage (0.0 = no zoom, 0.1 = 10%)
+};
 
 struct wooz_state {
   struct wl_compositor *compositor;
@@ -16,10 +25,17 @@ struct wooz_state {
   struct wp_viewporter *viewporter;
   struct wl_seat *seat;
   struct wl_pointer *pointer;
+  struct wl_keyboard *keyboard;
   struct wl_list outputs;
   struct wl_list windows;
 
   struct wooz_window *focused;
+  struct wooz_config config;
+
+  // Key repeat state
+  uint32_t pressed_key;
+  timer_t repeat_timer;
+  bool repeat_timer_created;
 
   size_t n_done;
 };
@@ -58,11 +74,16 @@ struct wooz_window {
 
   // Viewport source rectangle.
   struct wooz_boxf view_source;
+  struct wooz_boxf initial_view_source; // For restore/unzoom
 
   // Mouse pointer position if window is focused.
   double pointer_x;
   double pointer_y;
   bool pointer_pressed;
+
+  // Double-click detection
+  uint32_t last_click_time;
+  uint32_t last_click_button;
 
   struct {
     bool maximize : 1;

@@ -1,8 +1,11 @@
 #include <getopt.h>
 #include <linux/input-event-codes.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "buffer.h"
 #include "output-layout.h"
@@ -13,10 +16,54 @@
 #include "xdg-output-unstable-v1-protocol.h"
 #include "xdg-shell-protocol.h"
 
+// Key codes from linux/input-event-codes.h
+#define KEY_ESC 1
+#define KEY_0 11
+#define KEY_MINUS 12
+#define KEY_EQUAL 13
+#define KEY_Q 16
+#define KEY_X 45
+#define KEY_KPMINUS 74
+#define KEY_KPPLUS 78
+#define KEY_KP0 82
+#define KEY_UP 103
+#define KEY_LEFT 105
+#define KEY_RIGHT 106
+#define KEY_DOWN 108
+
 #define min(x, y) (x < y ? x : y)
 #define max(x, y) (x > y ? x : y)
 
 #define MAX_SCROLL 16
+#define DOUBLE_CLICK_TIME_MS 400
+#define KEYBOARD_PAN_STEP 50.0
+#define KEYBOARD_ZOOM_STEP 10.0
+#define KEY_REPEAT_DELAY_MS 500
+#define KEY_REPEAT_RATE_MS 50
+
+static void restore_view(struct wooz_window *win) {
+  win->view_source = win->initial_view_source;
+}
+
+static void apply_zoom(struct wooz_window *win, double zoom_change, double center_x, double center_y) {
+  double ratio = win->output->ratio;
+
+  // Calculate the zoom change in pixels
+  double scroll = zoom_change;
+
+  if (win->view_source.width - scroll * ratio < MAX_SCROLL ||
+      win->view_source.height - scroll < MAX_SCROLL)
+    return;
+
+  // Calculate center point as ratio of viewport
+  double dx = center_x / (double)win->output->logical_geometry.width;
+  double dy = center_y / (double)win->output->logical_geometry.height;
+
+  win->view_source.x += scroll * ratio * dx;
+  win->view_source.width -= scroll * ratio;
+  win->view_source.y += scroll * dy;
+  win->view_source.height -= scroll;
+}
 
 static void render_window(struct wooz_window *win) {
   win->view_source.width =
@@ -38,6 +85,100 @@ static void render_window(struct wooz_window *win) {
                          wl_fixed_from_double(win->view_source.height));
 
   wl_surface_commit(win->surface);
+}
+
+static void handle_key_action(struct wooz_state *state, uint32_t key) {
+  struct wooz_window *win = state->focused;
+  if (win == NULL) {
+    return;
+  }
+
+  switch (key) {
+  case KEY_EQUAL: // For keyboards where + is shift+=
+  case KEY_KPPLUS:
+    // Zoom in at center
+    apply_zoom(win, KEYBOARD_ZOOM_STEP,
+               win->output->logical_geometry.width / 2.0,
+               win->output->logical_geometry.height / 2.0);
+    render_window(win);
+    break;
+
+  case KEY_MINUS:
+  case KEY_KPMINUS:
+    // Zoom out at center
+    apply_zoom(win, -KEYBOARD_ZOOM_STEP,
+               win->output->logical_geometry.width / 2.0,
+               win->output->logical_geometry.height / 2.0);
+    render_window(win);
+    break;
+
+  case KEY_LEFT:
+    win->view_source.x -= KEYBOARD_PAN_STEP;
+    render_window(win);
+    break;
+
+  case KEY_RIGHT:
+    win->view_source.x += KEYBOARD_PAN_STEP;
+    render_window(win);
+    break;
+
+  case KEY_UP:
+    win->view_source.y -= KEYBOARD_PAN_STEP;
+    render_window(win);
+    break;
+
+  case KEY_DOWN:
+    win->view_source.y += KEYBOARD_PAN_STEP;
+    render_window(win);
+    break;
+  }
+}
+
+static void key_repeat_handler(union sigval sv) {
+  struct wooz_state *state = sv.sival_ptr;
+  if (state->pressed_key != 0) {
+    handle_key_action(state, state->pressed_key);
+  }
+}
+
+static void stop_key_repeat(struct wooz_state *state) {
+  if (state->repeat_timer_created && state->pressed_key != 0) {
+    struct itimerspec its = {0};
+    timer_settime(state->repeat_timer, 0, &its, NULL);
+    state->pressed_key = 0;
+  }
+}
+
+static void start_key_repeat(struct wooz_state *state, uint32_t key) {
+  state->pressed_key = key;
+
+  if (!state->repeat_timer_created) {
+    struct sigevent sev = {0};
+    sev.sigev_notify = SIGEV_THREAD;
+    sev.sigev_notify_function = key_repeat_handler;
+    sev.sigev_value.sival_ptr = state;
+
+    if (timer_create(CLOCK_MONOTONIC, &sev, &state->repeat_timer) == 0) {
+      state->repeat_timer_created = true;
+    } else {
+      return;
+    }
+  }
+
+  struct itimerspec its;
+  its.it_value.tv_sec = KEY_REPEAT_DELAY_MS / 1000;
+  its.it_value.tv_nsec = (KEY_REPEAT_DELAY_MS % 1000) * 1000000;
+  its.it_interval.tv_sec = KEY_REPEAT_RATE_MS / 1000;
+  its.it_interval.tv_nsec = (KEY_REPEAT_RATE_MS % 1000) * 1000000;
+
+  timer_settime(state->repeat_timer, 0, &its, NULL);
+}
+
+static bool is_repeatable_key(uint32_t key) {
+  return key == KEY_EQUAL || key == KEY_KPPLUS ||
+         key == KEY_MINUS || key == KEY_KPMINUS ||
+         key == KEY_LEFT || key == KEY_RIGHT ||
+         key == KEY_UP || key == KEY_DOWN;
 }
 
 static void screencopy_frame_handle_buffer(
@@ -386,6 +527,21 @@ static void pointer_handle_motion(void *data, struct wl_pointer *pointer,
     win->view_source.x -= dx;
     win->view_source.y -= dy;
     render_window(win);
+  } else if (state->config.mouse_track) {
+    // Mouse tracking: center viewport on mouse position
+    double scale = win->view_source.width / win->output->logical_geometry.width;
+    double viewport_center_x = win->pointer_x;
+    double viewport_center_y = win->pointer_y;
+
+    double new_center_x = x;
+    double new_center_y = y;
+
+    double dx = (new_center_x - viewport_center_x) * scale;
+    double dy = (new_center_y - viewport_center_y) * scale;
+
+    win->view_source.x += dx;
+    win->view_source.y += dy;
+    render_window(win);
   }
 
   win->pointer_x = x;
@@ -399,7 +555,22 @@ static void pointer_handle_button(void *data, struct wl_pointer *pointer,
   struct wooz_window *win = state->focused;
 
   if (button == BTN_LEFT) {
-    win->pointer_pressed = button_state == WL_POINTER_BUTTON_STATE_PRESSED;
+    if (button_state == WL_POINTER_BUTTON_STATE_PRESSED) {
+      // Check for double-click
+      if (win->last_click_button == BTN_LEFT &&
+          (time - win->last_click_time) < DOUBLE_CLICK_TIME_MS) {
+        // Double-click detected - restore view
+        restore_view(win);
+        render_window(win);
+        win->last_click_time = 0;
+      } else {
+        win->last_click_time = time;
+        win->last_click_button = button;
+      }
+      win->pointer_pressed = true;
+    } else {
+      win->pointer_pressed = false;
+    }
   } else if (button == BTN_RIGHT &&
              button_state == WL_POINTER_BUTTON_STATE_RELEASED) {
     win->state->n_done = 0;
@@ -416,22 +587,9 @@ static void pointer_handle_axis(void *data, struct wl_pointer *pointer,
   double scale = win->view_source.width / win->output->geometry.width;
   // x10 for faster zoom.
   double scroll = wl_fixed_to_double(value) * scale * 10;
-  double ratio = win->output->ratio;
-
-  // X and Y diff to zoom towards mouse pointer.
-  double dx = win->pointer_x / (double)win->output->logical_geometry.width;
-  double dy = win->pointer_y / (double)win->output->logical_geometry.height;
 
   if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
-    if (win->view_source.width - scroll * ratio < MAX_SCROLL ||
-        win->view_source.height - scroll < MAX_SCROLL)
-      return;
-
-    win->view_source.x += scroll * ratio * dx;
-    win->view_source.width -= scroll * ratio;
-    win->view_source.y += scroll * dy;
-    win->view_source.height -= scroll;
-
+    apply_zoom(win, scroll, win->pointer_x, win->pointer_y);
     render_window(win);
   }
 }
@@ -442,6 +600,101 @@ static const struct wl_pointer_listener pointer_listener = {
     .motion = pointer_handle_motion,
     .button = pointer_handle_button,
     .axis = pointer_handle_axis,
+};
+
+static void keyboard_handle_keymap(void *data, struct wl_keyboard *keyboard,
+                                   uint32_t format, int32_t fd, uint32_t size) {
+  close(fd);
+}
+
+static void keyboard_handle_enter(void *data, struct wl_keyboard *keyboard,
+                                  uint32_t serial, struct wl_surface *surface,
+                                  struct wl_array *keys) {
+  // No-op
+}
+
+static void keyboard_handle_leave(void *data, struct wl_keyboard *keyboard,
+                                  uint32_t serial, struct wl_surface *surface) {
+  // No-op
+}
+
+static void keyboard_handle_key(void *data, struct wl_keyboard *keyboard,
+                               uint32_t serial, uint32_t time, uint32_t key,
+                               uint32_t key_state) {
+  struct wooz_state *state = data;
+  struct wooz_window *win = state->focused;
+
+  if (win == NULL) {
+    return;
+  }
+
+  if (key_state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+    // Stop key repeat when any key is released
+    if (state->pressed_key == key) {
+      stop_key_repeat(state);
+    }
+    return;
+  }
+
+  // Check for custom close key
+  if (state->config.close_key != 0 && key == state->config.close_key) {
+    state->n_done = 0;
+    return;
+  }
+
+  switch (key) {
+  case KEY_ESC:
+    // Default close behavior (if no custom close key)
+    if (state->config.close_key == 0) {
+      state->n_done = 0;
+    }
+    break;
+
+  case KEY_0:
+  case KEY_KP0:
+    // Restore/unzoom
+    restore_view(win);
+    render_window(win);
+    break;
+
+  case KEY_EQUAL: // For keyboards where + is shift+=
+  case KEY_KPPLUS:
+  case KEY_MINUS:
+  case KEY_KPMINUS:
+  case KEY_LEFT:
+  case KEY_RIGHT:
+  case KEY_UP:
+  case KEY_DOWN:
+    // Handle the key action immediately
+    handle_key_action(state, key);
+    // Start key repeat for these keys
+    if (is_repeatable_key(key)) {
+      start_key_repeat(state, key);
+    }
+    break;
+  }
+}
+
+static void keyboard_handle_modifiers(void *data, struct wl_keyboard *keyboard,
+                                      uint32_t serial, uint32_t mods_depressed,
+                                      uint32_t mods_latched,
+                                      uint32_t mods_locked, uint32_t group) {
+  // No-op
+}
+
+static void keyboard_handle_repeat_info(void *data,
+                                        struct wl_keyboard *keyboard,
+                                        int32_t rate, int32_t delay) {
+  // No-op
+}
+
+static const struct wl_keyboard_listener keyboard_listener = {
+    .keymap = keyboard_handle_keymap,
+    .enter = keyboard_handle_enter,
+    .leave = keyboard_handle_leave,
+    .key = keyboard_handle_key,
+    .modifiers = keyboard_handle_modifiers,
+    .repeat_info = keyboard_handle_repeat_info,
 };
 
 static void seat_handle_capabilities(void *data, struct wl_seat *seat,
@@ -455,6 +708,16 @@ static void seat_handle_capabilities(void *data, struct wl_seat *seat,
     if (state->pointer != NULL) {
       wl_pointer_destroy(state->pointer);
       state->pointer = NULL;
+    }
+  }
+
+  if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) != 0) {
+    state->keyboard = wl_seat_get_keyboard(seat);
+    wl_keyboard_add_listener(state->keyboard, &keyboard_listener, state);
+  } else {
+    if (state->keyboard != NULL) {
+      wl_keyboard_destroy(state->keyboard);
+      state->keyboard = NULL;
     }
   }
 }
@@ -511,23 +774,87 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = handle_global_remove,
 };
 
-static const char usage[] = "Usage: wooz [options...]\n"
-                            "\n"
-                            "  -h              Show help message and quit.\n";
+static const char usage[] =
+    "Usage: wooz [options...]\n"
+    "\n"
+    "Options:\n"
+    "  -h, --help              Show help message and quit\n"
+    "  --map-close KEY         Set key to close (e.g., 'Esc', 'q')\n"
+    "  --mouse-track           Enable mouse tracking (follow mouse without clicking)\n"
+    "  --zoom-in PERCENT       Set initial zoom percentage (e.g., '10%', '50%')\n"
+    "\n"
+    "Controls:\n"
+    "  Mouse scroll            Zoom in/out at mouse position\n"
+    "  Left click + drag       Pan the view\n"
+    "  Right click             Exit\n"
+    "  Double click            Restore/unzoom\n"
+    "  +/-                     Zoom in/out at center\n"
+    "  Arrow keys              Pan the view\n"
+    "  0                       Restore/unzoom\n"
+    "  Esc                     Exit (default)\n";
+
+static uint32_t parse_key_name(const char *name) {
+  if (strcmp(name, "Esc") == 0 || strcmp(name, "Escape") == 0) {
+    return KEY_ESC;
+  } else if (strcmp(name, "q") == 0 || strcmp(name, "Q") == 0) {
+    return KEY_Q;
+  } else if (strcmp(name, "x") == 0 || strcmp(name, "X") == 0) {
+    return KEY_X;
+  }
+  return 0; // Invalid key
+}
 
 int main(int argc, char *argv[]) {
+  struct wooz_config config = {0};
+
+  static struct option long_options[] = {
+      {"help", no_argument, 0, 'h'},
+      {"map-close", required_argument, 0, 'c'},
+      {"mouse-track", no_argument, 0, 'm'},
+      {"zoom-in", required_argument, 0, 'z'},
+      {0, 0, 0, 0}
+  };
+
   int opt;
-  while ((opt = getopt(argc, argv, "h")) != -1) {
+  int option_index = 0;
+  while ((opt = getopt_long(argc, argv, "h", long_options, &option_index)) != -1) {
     switch (opt) {
     case 'h':
       printf("%s", usage);
       return EXIT_SUCCESS;
+    case 'c': {
+      config.close_key = parse_key_name(optarg);
+      if (config.close_key == 0) {
+        fprintf(stderr, "Invalid key name: %s (supported: Esc, q, x)\n", optarg);
+        return EXIT_FAILURE;
+      }
+      break;
+    }
+    case 'm':
+      config.mouse_track = true;
+      break;
+    case 'z': {
+      char *endptr;
+      double zoom = strtod(optarg, &endptr);
+      if (*endptr == '%') {
+        config.initial_zoom = zoom / 100.0;
+      } else {
+        config.initial_zoom = zoom;
+      }
+      if (config.initial_zoom < 0.0 || config.initial_zoom >= 1.0) {
+        fprintf(stderr, "Invalid zoom percentage: %s (must be 0-99%%)\n", optarg);
+        return EXIT_FAILURE;
+      }
+      break;
+    }
     default:
+      fprintf(stderr, "%s", usage);
       return EXIT_FAILURE;
     }
   }
 
   struct wooz_state state = {0};
+  state.config = config;
   wl_list_init(&state.outputs);
   wl_list_init(&state.windows);
 
@@ -634,6 +961,18 @@ int main(int argc, char *argv[]) {
         .width = (double)output->geometry.width,
         .height = (double)output->geometry.height,
     };
+    // Store initial view for restore/unzoom
+    win->initial_view_source = win->view_source;
+
+    // Apply initial zoom if configured
+    if (state.config.initial_zoom > 0.0) {
+      double center_x = output->logical_geometry.width / 2.0;
+      double center_y = output->logical_geometry.height / 2.0;
+      // Calculate zoom amount based on percentage
+      double zoom_pixels = output->geometry.height * state.config.initial_zoom;
+      apply_zoom(win, -zoom_pixels, center_x, center_y);
+    }
+
     if (win->surface == NULL) {
       fprintf(stderr, "failed to create wayland surface\n");
       return EXIT_FAILURE;
@@ -652,6 +991,12 @@ int main(int argc, char *argv[]) {
 
   state.n_done = 1;
   while (state.n_done && wl_display_dispatch(state.display)) {
+  }
+
+  // Clean up key repeat timer
+  if (state.repeat_timer_created) {
+    stop_key_repeat(&state);
+    timer_delete(state.repeat_timer);
   }
 
   struct wooz_window *win;
@@ -691,6 +1036,9 @@ int main(int argc, char *argv[]) {
   }
   if (state.pointer) {
     wl_pointer_release(state.pointer);
+  }
+  if (state.keyboard) {
+    wl_keyboard_release(state.keyboard);
   }
   wl_seat_release(state.seat);
   xdg_wm_base_destroy(state.shell);

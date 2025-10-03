@@ -2,10 +2,50 @@
 
 https://github.com/user-attachments/assets/23e9aeac-4f60-47e6-9c49-7a3706bcdbe9
 
-Scroll with your mouse to zoom and use left mouse click and drag to move the
-viewport.
+A powerful and customizable screen magnifier for Wayland compositors with mouse and keyboard controls.
 
-Use right click to exit.
+## Usage
+
+```sh
+wooz [options...]
+```
+
+### Options
+
+* `-h, --help` - Show help message and quit
+* `--map-close KEY` - Set key to close (e.g., 'Esc', 'q', 'x')
+* `--mouse-track` - Enable mouse tracking (follow mouse without clicking)
+* `--zoom-in PERCENT` - Set initial zoom percentage (e.g., '10%', '50%')
+
+### Controls
+
+**Mouse:**
+* Scroll wheel - Zoom in/out at mouse position
+* Left click + drag - Pan the view
+* Right click - Exit
+* Double click - Restore/unzoom to original view
+
+**Keyboard:**
+* `+` / `-` - Zoom in/out at screen center
+* Arrow keys - Pan the view
+* `0` - Restore/unzoom to original view
+* `Esc` - Exit (default, customizable with `--map-close`)
+
+### Examples
+
+```sh
+# Start with 10% zoom at center
+wooz --zoom-in 10%
+
+# Enable mouse tracking (viewport follows mouse)
+wooz --mouse-track
+
+# Use 'q' key to exit instead of Esc
+wooz --map-close q
+
+# Combine options
+wooz --zoom-in 25% --mouse-track --map-close x
+```
 
 
 ## Building from source
