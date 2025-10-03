@@ -12,6 +12,7 @@ struct wooz_config {
   uint32_t close_key; // Linux input event code for close action (0 = default Esc)
   bool mouse_track;   // Enable mouse tracking
   double initial_zoom; // Initial zoom percentage (0.0 = no zoom, 0.1 = 10%)
+  bool invert_scroll; // Invert scroll direction (scroll up zooms in)
 };
 
 struct wooz_state {
