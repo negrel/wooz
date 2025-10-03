@@ -342,6 +342,18 @@ static void xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
     wp_viewport_set_destination(win->viewport, win->configure.width,
                                 win->configure.height);
   }
+
+  // Apply initial zoom on first configure
+  if (!win->initial_zoom_applied && win->state->config.initial_zoom > 0.0) {
+    double center_x = win->output->logical_geometry.width / 2.0;
+    double center_y = win->output->logical_geometry.height / 2.0;
+    double zoom_pixels = win->output->geometry.height * win->state->config.initial_zoom;
+    apply_zoom(win, -zoom_pixels, center_x, center_y);
+    render_window(win);
+    win->initial_zoom_applied = true;
+    return; // render_window already calls wl_surface_commit
+  }
+
   wl_surface_commit(win->surface);
 }
 
@@ -967,15 +979,6 @@ int main(int argc, char *argv[]) {
     xdg_toplevel_set_fullscreen(win->xdg_toplevel, output->wl_output);
 
     wl_surface_commit(win->surface);
-
-    // Apply initial zoom if configured (after surface is set up)
-    if (state.config.initial_zoom > 0.0) {
-      double center_x = output->logical_geometry.width / 2.0;
-      double center_y = output->logical_geometry.height / 2.0;
-      // Calculate zoom amount based on percentage
-      double zoom_pixels = output->geometry.height * state.config.initial_zoom;
-      apply_zoom(win, -zoom_pixels, center_x, center_y);
-    }
   }
 
   state.n_done = 1;

@@ -101,6 +101,7 @@ struct wooz_window {
   bool is_tiled_left;
   bool is_tiled_right;
   bool is_tiled; /* At least one of is_tiled_{top,bottom,left,right} is true */
+  bool initial_zoom_applied;
   struct {
     int width;
     int height;
