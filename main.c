@@ -781,6 +781,7 @@ static const char usage[] =
     "  -h, --help              Show help message and quit\n"
     "  --map-close KEY         Set key to close (e.g., 'Esc', 'q')\n"
     "  --mouse-track           Enable mouse tracking (follow mouse without clicking)\n"
+    "  --output NAME           Run on specific output (e.g., 'DP-1')\n"
     "  --zoom-in PERCENT       Set initial zoom percentage (e.g., '10%', '50%')\n"
     "\n"
     "Controls:\n"
@@ -792,6 +793,21 @@ static const char usage[] =
     "  Arrow keys              Pan the view\n"
     "  0                       Restore/unzoom\n"
     "  Esc                     Exit (default)\n";
+
+static bool should_include_output(struct wooz_output *output, const char *filter) {
+  // If no filter is set, include all outputs
+  if (filter == NULL) {
+    return true;
+  }
+
+  // If output doesn't have a name yet, we can't filter it
+  if (output->name == NULL) {
+    return false;
+  }
+
+  // Check if the output name matches the filter
+  return strcmp(output->name, filter) == 0;
+}
 
 static uint32_t parse_key_name(const char *name) {
   if (strcmp(name, "Esc") == 0 || strcmp(name, "Escape") == 0) {
@@ -811,6 +827,7 @@ int main(int argc, char *argv[]) {
       {"help", no_argument, 0, 'h'},
       {"map-close", required_argument, 0, 'c'},
       {"mouse-track", no_argument, 0, 'm'},
+      {"output", required_argument, 0, 'o'},
       {"zoom-in", required_argument, 0, 'z'},
       {0, 0, 0, 0}
   };
@@ -832,6 +849,9 @@ int main(int argc, char *argv[]) {
     }
     case 'm':
       config.mouse_track = true;
+      break;
+    case 'o':
+      config.output_filter = strdup(optarg);
       break;
     case 'z': {
       char *endptr;
@@ -927,6 +947,11 @@ int main(int argc, char *argv[]) {
   size_t n_pending = 0;
   struct wooz_output *output;
   wl_list_for_each(output, &state.outputs, link) {
+    // Skip outputs that don't match the filter
+    if (!should_include_output(output, state.config.output_filter)) {
+      continue;
+    }
+
     output->screencopy_frame = zwlr_screencopy_manager_v1_capture_output(
         state.screencopy_manager, false, output->wl_output);
     zwlr_screencopy_frame_v1_add_listener(output->screencopy_frame,
@@ -936,7 +961,11 @@ int main(int argc, char *argv[]) {
   }
 
   if (n_pending == 0) {
-    fprintf(stderr, "supplied geometry did not intersect with any outputs\n");
+    if (state.config.output_filter != NULL) {
+      fprintf(stderr, "no output found matching '%s'\n", state.config.output_filter);
+    } else {
+      fprintf(stderr, "no outputs found\n");
+    }
     return EXIT_FAILURE;
   }
 
@@ -950,6 +979,11 @@ int main(int argc, char *argv[]) {
   }
 
   wl_list_for_each(output, &state.outputs, link) {
+    // Skip outputs that don't match the filter
+    if (!should_include_output(output, state.config.output_filter)) {
+      continue;
+    }
+
     struct wooz_window *win = calloc(1, sizeof(struct wooz_window));
     wl_list_insert(&state.windows, &win->link);
     win->state = &state;
@@ -1079,6 +1113,11 @@ int main(int argc, char *argv[]) {
   wl_registry_destroy(state.registry);
   wl_compositor_destroy(state.compositor);
   wl_display_disconnect(state.display);
+
+  // Free config resources
+  if (state.config.output_filter != NULL) {
+    free(state.config.output_filter);
+  }
 
   return EXIT_SUCCESS;
 }
