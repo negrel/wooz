@@ -34,8 +34,7 @@ struct wooz_state {
 
   // Key repeat state
   uint32_t pressed_key;
-  timer_t repeat_timer;
-  bool repeat_timer_created;
+  int repeat_timer_fd;
 
   size_t n_done;
 };

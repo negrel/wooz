@@ -1,9 +1,10 @@
 #include <getopt.h>
 #include <linux/input-event-codes.h>
-#include <signal.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/timerfd.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -134,17 +135,10 @@ static void handle_key_action(struct wooz_state *state, uint32_t key) {
   }
 }
 
-static void key_repeat_handler(union sigval sv) {
-  struct wooz_state *state = sv.sival_ptr;
-  if (state->pressed_key != 0) {
-    handle_key_action(state, state->pressed_key);
-  }
-}
-
 static void stop_key_repeat(struct wooz_state *state) {
-  if (state->repeat_timer_created && state->pressed_key != 0) {
+  if (state->repeat_timer_fd >= 0 && state->pressed_key != 0) {
     struct itimerspec its = {0};
-    timer_settime(state->repeat_timer, 0, &its, NULL);
+    timerfd_settime(state->repeat_timer_fd, 0, &its, NULL);
     state->pressed_key = 0;
   }
 }
@@ -152,15 +146,9 @@ static void stop_key_repeat(struct wooz_state *state) {
 static void start_key_repeat(struct wooz_state *state, uint32_t key) {
   state->pressed_key = key;
 
-  if (!state->repeat_timer_created) {
-    struct sigevent sev = {0};
-    sev.sigev_notify = SIGEV_THREAD;
-    sev.sigev_notify_function = key_repeat_handler;
-    sev.sigev_value.sival_ptr = state;
-
-    if (timer_create(CLOCK_MONOTONIC, &sev, &state->repeat_timer) == 0) {
-      state->repeat_timer_created = true;
-    } else {
+  if (state->repeat_timer_fd < 0) {
+    state->repeat_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+    if (state->repeat_timer_fd < 0) {
       return;
     }
   }
@@ -171,7 +159,7 @@ static void start_key_repeat(struct wooz_state *state, uint32_t key) {
   its.it_interval.tv_sec = KEY_REPEAT_RATE_MS / 1000;
   its.it_interval.tv_nsec = (KEY_REPEAT_RATE_MS % 1000) * 1000000;
 
-  timer_settime(state->repeat_timer, 0, &its, NULL);
+  timerfd_settime(state->repeat_timer_fd, 0, &its, NULL);
 }
 
 static bool is_repeatable_key(uint32_t key) {
@@ -855,6 +843,7 @@ int main(int argc, char *argv[]) {
 
   struct wooz_state state = {0};
   state.config = config;
+  state.repeat_timer_fd = -1;
   wl_list_init(&state.outputs);
   wl_list_init(&state.windows);
 
@@ -964,15 +953,6 @@ int main(int argc, char *argv[]) {
     // Store initial view for restore/unzoom
     win->initial_view_source = win->view_source;
 
-    // Apply initial zoom if configured
-    if (state.config.initial_zoom > 0.0) {
-      double center_x = output->logical_geometry.width / 2.0;
-      double center_y = output->logical_geometry.height / 2.0;
-      // Calculate zoom amount based on percentage
-      double zoom_pixels = output->geometry.height * state.config.initial_zoom;
-      apply_zoom(win, -zoom_pixels, center_x, center_y);
-    }
-
     if (win->surface == NULL) {
       fprintf(stderr, "failed to create wayland surface\n");
       return EXIT_FAILURE;
@@ -987,16 +967,65 @@ int main(int argc, char *argv[]) {
     xdg_toplevel_set_fullscreen(win->xdg_toplevel, output->wl_output);
 
     wl_surface_commit(win->surface);
+
+    // Apply initial zoom if configured (after surface is set up)
+    if (state.config.initial_zoom > 0.0) {
+      double center_x = output->logical_geometry.width / 2.0;
+      double center_y = output->logical_geometry.height / 2.0;
+      // Calculate zoom amount based on percentage
+      double zoom_pixels = output->geometry.height * state.config.initial_zoom;
+      apply_zoom(win, -zoom_pixels, center_x, center_y);
+    }
   }
 
   state.n_done = 1;
-  while (state.n_done && wl_display_dispatch(state.display)) {
+
+  // Main event loop with timer support
+  int wl_fd = wl_display_get_fd(state.display);
+  struct pollfd fds[2];
+
+  while (state.n_done) {
+    // Prepare events before dispatching
+    while (wl_display_prepare_read(state.display) != 0) {
+      wl_display_dispatch_pending(state.display);
+    }
+    wl_display_flush(state.display);
+
+    // Set up polling
+    fds[0].fd = wl_fd;
+    fds[0].events = POLLIN;
+    fds[1].fd = state.repeat_timer_fd;
+    fds[1].events = POLLIN;
+
+    int nfds = (state.repeat_timer_fd >= 0) ? 2 : 1;
+
+    if (poll(fds, nfds, -1) < 0) {
+      wl_display_cancel_read(state.display);
+      break;
+    }
+
+    // Handle timer events
+    if (nfds > 1 && (fds[1].revents & POLLIN)) {
+      uint64_t expirations;
+      read(state.repeat_timer_fd, &expirations, sizeof(expirations));
+      if (state.pressed_key != 0) {
+        handle_key_action(&state, state.pressed_key);
+      }
+    }
+
+    // Handle Wayland events
+    if (fds[0].revents & POLLIN) {
+      wl_display_read_events(state.display);
+      wl_display_dispatch_pending(state.display);
+    } else {
+      wl_display_cancel_read(state.display);
+    }
   }
 
   // Clean up key repeat timer
-  if (state.repeat_timer_created) {
+  if (state.repeat_timer_fd >= 0) {
     stop_key_repeat(&state);
-    timer_delete(state.repeat_timer);
+    close(state.repeat_timer_fd);
   }
 
   struct wooz_window *win;
