@@ -46,7 +46,8 @@ static void restore_view(struct wooz_window *win) {
   win->view_source = win->initial_view_source;
 }
 
-static void apply_zoom(struct wooz_window *win, double zoom_change, double center_x, double center_y) {
+static void apply_zoom(struct wooz_window *win, double zoom_change,
+                       double center_x, double center_y) {
   double ratio = win->output->ratio;
 
   // Calculate the zoom change in pixels
@@ -163,9 +164,8 @@ static void start_key_repeat(struct wooz_state *state, uint32_t key) {
 }
 
 static bool is_repeatable_key(uint32_t key) {
-  return key == KEY_EQUAL || key == KEY_KPPLUS ||
-         key == KEY_MINUS || key == KEY_KPMINUS ||
-         key == KEY_LEFT || key == KEY_RIGHT ||
+  return key == KEY_EQUAL || key == KEY_KPPLUS || key == KEY_MINUS ||
+         key == KEY_KPMINUS || key == KEY_LEFT || key == KEY_RIGHT ||
          key == KEY_UP || key == KEY_DOWN;
 }
 
@@ -347,7 +347,8 @@ static void xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
   if (!win->initial_zoom_applied && win->state->config.initial_zoom > 0.0) {
     double center_x = win->output->logical_geometry.width / 2.0;
     double center_y = win->output->logical_geometry.height / 2.0;
-    double zoom_pixels = win->output->geometry.height * win->state->config.initial_zoom;
+    double zoom_pixels =
+        win->output->geometry.height * win->state->config.initial_zoom;
     apply_zoom(win, -zoom_pixels, center_x, center_y);
     render_window(win);
     win->initial_zoom_applied = true;
@@ -529,15 +530,14 @@ static void pointer_handle_motion(void *data, struct wl_pointer *pointer,
     render_window(win);
   } else if (state->config.mouse_track) {
     // Mouse tracking: center viewport on mouse position
-    double scale = win->view_source.width / win->output->logical_geometry.width;
     double viewport_center_x = win->pointer_x;
     double viewport_center_y = win->pointer_y;
 
     double new_center_x = x;
     double new_center_y = y;
 
-    double dx = (new_center_x - viewport_center_x) * scale;
-    double dy = (new_center_y - viewport_center_y) * scale;
+    double dx = (new_center_x - viewport_center_x);
+    double dy = (new_center_y - viewport_center_y);
 
     win->view_source.x += dx;
     win->view_source.y += dy;
@@ -624,8 +624,8 @@ static void keyboard_handle_leave(void *data, struct wl_keyboard *keyboard,
 }
 
 static void keyboard_handle_key(void *data, struct wl_keyboard *keyboard,
-                               uint32_t serial, uint32_t time, uint32_t key,
-                               uint32_t key_state) {
+                                uint32_t serial, uint32_t time, uint32_t key,
+                                uint32_t key_state) {
   struct wooz_state *state = data;
   struct wooz_window *win = state->focused;
 
@@ -785,9 +785,11 @@ static const char usage[] =
     "Options:\n"
     "  -h, --help              Show help message and quit\n"
     "  --map-close KEY         Set key to close (e.g., 'Esc', 'q')\n"
-    "  --mouse-track           Enable mouse tracking (follow mouse without clicking)\n"
+    "  --mouse-track           Enable mouse tracking (follow mouse without "
+    "clicking)\n"
     "  --output NAME           Run on specific output (e.g., 'DP-1')\n"
-    "  --zoom-in PERCENT       Set initial zoom percentage (e.g., '10%', '50%')\n"
+    "  --zoom-in PERCENT       Set initial zoom percentage (e.g., '10%', "
+    "'50%')\n"
     "  --invert-scroll         Invert scroll direction (scroll up zooms in)\n"
     "\n"
     "Controls:\n"
@@ -800,7 +802,8 @@ static const char usage[] =
     "  0                       Restore/unzoom\n"
     "  Esc                     Exit (default)\n";
 
-static bool should_include_output(struct wooz_output *output, const char *filter) {
+static bool should_include_output(struct wooz_output *output,
+                                  const char *filter) {
   // If no filter is set, include all outputs
   if (filter == NULL) {
     return true;
@@ -836,12 +839,12 @@ int main(int argc, char *argv[]) {
       {"output", required_argument, 0, 'o'},
       {"zoom-in", required_argument, 0, 'z'},
       {"invert-scroll", no_argument, 0, 'i'},
-      {0, 0, 0, 0}
-  };
+      {0, 0, 0, 0}};
 
   int opt;
   int option_index = 0;
-  while ((opt = getopt_long(argc, argv, "h", long_options, &option_index)) != -1) {
+  while ((opt = getopt_long(argc, argv, "h", long_options, &option_index)) !=
+         -1) {
     switch (opt) {
     case 'h':
       printf("%s", usage);
@@ -849,7 +852,8 @@ int main(int argc, char *argv[]) {
     case 'c': {
       config.close_key = parse_key_name(optarg);
       if (config.close_key == 0) {
-        fprintf(stderr, "Invalid key name: %s (supported: Esc, q, x)\n", optarg);
+        fprintf(stderr, "Invalid key name: %s (supported: Esc, q, x)\n",
+                optarg);
         return EXIT_FAILURE;
       }
       break;
@@ -869,7 +873,8 @@ int main(int argc, char *argv[]) {
         config.initial_zoom = zoom;
       }
       if (config.initial_zoom < 0.0 || config.initial_zoom >= 1.0) {
-        fprintf(stderr, "Invalid zoom percentage: %s (must be 0-99%%)\n", optarg);
+        fprintf(stderr, "Invalid zoom percentage: %s (must be 0-99%%)\n",
+                optarg);
         return EXIT_FAILURE;
       }
       break;
@@ -972,7 +977,8 @@ int main(int argc, char *argv[]) {
 
   if (n_pending == 0) {
     if (state.config.output_filter != NULL) {
-      fprintf(stderr, "no output found matching '%s'\n", state.config.output_filter);
+      fprintf(stderr, "no output found matching '%s'\n",
+              state.config.output_filter);
     } else {
       fprintf(stderr, "no outputs found\n");
     }
