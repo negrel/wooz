@@ -16,6 +16,7 @@ wooz [options...]
 * `--map-close KEY` - Set key to close (e.g., 'Esc', 'q', 'x')
 * `--mouse-track` - Enable mouse tracking (follow mouse without clicking)
 * `--zoom-in PERCENT` - Set initial zoom percentage (e.g., '10%', '50%')
+* `--invert-scroll` - Invert scroll direction (scroll up zooms in)
 
 ### Controls
 
@@ -45,6 +46,9 @@ wooz --map-close q
 
 # Combine options
 wooz --zoom-in 25% --mouse-track --map-close x
+
+# Invert scroll direction (scroll up to zoom in)
+wooz --invert-scroll
 ```
 
 
