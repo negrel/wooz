@@ -17,6 +17,7 @@ wooz [options...]
 * `--mouse-track` - Enable mouse tracking (follow mouse without clicking)
 * `--output NAME` - Run on specific output (e.g., 'DP-1', 'HDMI-A-1')
 * `--zoom-in PERCENT` - Set initial zoom percentage (e.g., '10%', '50%')
+* `--invert-scroll` - Invert scroll direction (scroll up zooms in)
 
 ### Controls
 
@@ -48,7 +49,10 @@ wooz --map-close q
 wooz --output DP-1
 
 # Combine options
-wooz --zoom-in 25% --mouse-track --map-close x --output HDMI-A-1
+wooz --zoom-in 25% --mouse-track --map-close x
+
+# Invert scroll direction (scroll up to zoom in)
+wooz --invert-scroll
 ```
 
 

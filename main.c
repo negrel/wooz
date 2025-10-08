@@ -588,6 +588,11 @@ static void pointer_handle_axis(void *data, struct wl_pointer *pointer,
   // x10 for faster zoom.
   double scroll = wl_fixed_to_double(value) * scale * 10;
 
+  // Invert scroll if configured
+  if (state->config.invert_scroll) {
+    scroll = -scroll;
+  }
+
   if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
     apply_zoom(win, scroll, win->pointer_x, win->pointer_y);
     render_window(win);
@@ -783,6 +788,7 @@ static const char usage[] =
     "  --mouse-track           Enable mouse tracking (follow mouse without clicking)\n"
     "  --output NAME           Run on specific output (e.g., 'DP-1')\n"
     "  --zoom-in PERCENT       Set initial zoom percentage (e.g., '10%', '50%')\n"
+    "  --invert-scroll         Invert scroll direction (scroll up zooms in)\n"
     "\n"
     "Controls:\n"
     "  Mouse scroll            Zoom in/out at mouse position\n"
@@ -829,6 +835,7 @@ int main(int argc, char *argv[]) {
       {"mouse-track", no_argument, 0, 'm'},
       {"output", required_argument, 0, 'o'},
       {"zoom-in", required_argument, 0, 'z'},
+      {"invert-scroll", no_argument, 0, 'i'},
       {0, 0, 0, 0}
   };
 
@@ -867,6 +874,9 @@ int main(int argc, char *argv[]) {
       }
       break;
     }
+    case 'i':
+      config.invert_scroll = true;
+      break;
     default:
       fprintf(stderr, "%s", usage);
       return EXIT_FAILURE;
