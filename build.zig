@@ -1,18 +1,42 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+const Scanner = @import("wayland").Scanner;
+
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    const scanner = Scanner.create(b, .{});
+    const wayland = b.createModule(.{ .root_source_file = scanner.result });
+
+    scanner.addCustomProtocol(
+        b.path("./protocols/unstable/wlr-screencopy-unstable-v1.xml"),
+    );
+    scanner.addCustomProtocol(
+        b.path("./protocols/unstable/xdg-output-unstable-v1.xml"),
+    );
+    scanner.addCustomProtocol(b.path("./protocols/stable/viewporter.xml"));
+    scanner.addCustomProtocol(b.path("./protocols/stable/xdg-shell.xml"));
+
+    scanner.generate("wl_compositor", 1);
+    scanner.generate("wl_shm", 1);
+    scanner.generate("xdg_wm_base", 1);
+    scanner.generate("zxdg_output_manager_v1", 1);
+    scanner.generate("wl_output", 1);
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    mod.addImport("wayland", wayland);
+    mod.linkSystemLibrary("wayland-client", .{});
+
     const exe = b.addExecutable(.{
         .name = "wooz",
         .root_module = mod,
     });
+    exe.linkLibC();
 
     b.installArtifact(exe);
 

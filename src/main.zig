@@ -1,17 +1,21 @@
 const std = @import("std");
+const wooz = @import("./wooz.zig");
 
-pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
-
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
-
-    try bw.flush(); // don't forget to flush!
+pub fn main() void {
+    wooz.main() catch |err| {
+        switch (err) {
+            error.ConnectFailed => std.log.err(
+                "failed to connect to wayland display",
+                .{},
+            ),
+            error.OutOfMemory => std.log.err("Out of memory", .{}),
+            error.Unexpected => std.log.err(
+                "An unexpected error occured",
+                .{},
+            ),
+        }
+        std.process.exit(@intCast(
+            (1 + @intFromError(err)) % std.math.maxInt(u8),
+        ));
+    };
 }

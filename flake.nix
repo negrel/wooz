@@ -25,11 +25,16 @@
         in
         {
           devShells = {
-            default = pkgs.mkShell {
+            default = pkgs.mkShell rec {
               buildInputs = with pkgs; [
                 zig
                 zls
+                wayland-scanner
+                pkg-config
+                wayland-protocols
+                wayland
               ];
+              LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
             };
           };
         }
