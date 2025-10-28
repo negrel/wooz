@@ -5,6 +5,7 @@ const Scanner = @import("wayland").Scanner;
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const llvm = b.option(bool, "llvm", "Use LLVM backend");
 
     const scanner = Scanner.create(b, .{});
     const wayland = b.createModule(.{ .root_source_file = scanner.result });
@@ -35,6 +36,7 @@ pub fn build(b: *std.Build) !void {
     const exe = b.addExecutable(.{
         .name = "wooz",
         .root_module = mod,
+        .use_llvm = llvm,
     });
     exe.linkLibC();
 
