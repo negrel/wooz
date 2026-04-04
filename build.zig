@@ -24,6 +24,8 @@ pub fn build(b: *std.Build) !void {
     scanner.generate("xdg_wm_base", 1);
     scanner.generate("zxdg_output_manager_v1", 1);
     scanner.generate("wl_output", 1);
+    scanner.generate("wp_viewporter", 1);
+    scanner.generate("zwlr_screencopy_manager_v1", 1);
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
