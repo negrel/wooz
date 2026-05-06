@@ -18,6 +18,7 @@ wooz [options...]
 * `--output NAME` - Run on specific output (e.g., 'DP-1', 'HDMI-A-1')
 * `--zoom-in PERCENT` - Set initial zoom percentage (e.g., '10%', '50%')
 * `--invert-scroll` - Invert scroll direction (scroll up zooms in)
+* `--spotlight` - Dim screen outside a spotlight circle when zoomed
 
 ### Controls
 
@@ -31,6 +32,8 @@ wooz [options...]
 * `+` / `-` - Zoom in/out at screen center
 * Arrow keys - Pan the view
 * `0` - Restore/unzoom to original view
+* `s` - Toggle spotlight dim overlay on/off
+* `[` / `]` - Decrease / increase spotlight radius
 * `Esc` - Exit (default, customizable with `--map-close`)
 
 ### Examples
@@ -53,6 +56,12 @@ wooz --zoom-in 25% --mouse-track --map-close x
 
 # Invert scroll direction (scroll up to zoom in)
 wooz --invert-scroll
+
+# Enable spotlight overlay (dims screen outside a circle when zoomed)
+wooz --spotlight
+
+# Combine spotlight with initial zoom
+wooz --spotlight --zoom-in 30%
 ```
 
 

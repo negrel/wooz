@@ -1,5 +1,6 @@
 #include <getopt.h>
 #include <linux/input-event-codes.h>
+#include <math.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,6 +42,11 @@
 #define KEYBOARD_ZOOM_STEP 10.0
 #define KEY_REPEAT_DELAY_MS 500
 #define KEY_REPEAT_RATE_MS 50
+#define SPOTLIGHT_RADIUS_DEFAULT 0.25
+#define SPOTLIGHT_RADIUS_STEP 0.05
+#define SPOTLIGHT_RADIUS_MIN 0.05
+#define SPOTLIGHT_RADIUS_MAX 0.90
+#define SPOTLIGHT_MOVE_THRESHOLD_SQ 16.0 // skip redraw if moved < 4px
 
 static void restore_view(struct wooz_window *win) {
   win->view_source = win->initial_view_source;
@@ -67,6 +73,108 @@ static void apply_zoom(struct wooz_window *win, double zoom_change,
   win->view_source.height -= round(scroll);
 }
 
+static void draw_spotlight_overlay(uint32_t *pixels, int width, int height,
+                                   int cx, int cy, double radius) {
+  int r_sq = (int)(radius * radius);
+
+  for (int y = 0; y < height; y++) {
+    int dy = y - cy;
+    int dy_sq = dy * dy;
+    uint32_t *row = pixels + y * width;
+    for (int x = 0; x < width; x++) {
+      int dx = x - cx;
+      row[x] = (dx * dx + dy_sq < r_sq) ? 0x00000000 : 0xAA000000;
+    }
+  }
+}
+
+static void make_surface_input_transparent(struct wooz_state *state,
+                                           struct wl_surface *surface) {
+  struct wl_region *region = wl_compositor_create_region(state->compositor);
+  if (!region)
+    return;
+
+  wl_surface_set_input_region(surface, region);
+  wl_region_destroy(region);
+}
+
+static void create_spotlight_overlay(struct wooz_window *win) {
+  struct wooz_state *state = win->state;
+  if (!state->subcompositor)
+    return;
+
+  int width = win->output->logical_geometry.width;
+  int height = win->output->logical_geometry.height;
+  int stride = width * 4;
+
+  win->overlay_buffer = create_buffer(state->shm, WL_SHM_FORMAT_ARGB8888,
+                                      width, height, stride);
+  if (!win->overlay_buffer)
+    return;
+
+  win->overlay_surface = wl_compositor_create_surface(state->compositor);
+  win->overlay_subsurface = wl_subcompositor_get_subsurface(
+      state->subcompositor, win->overlay_surface, win->surface);
+  make_surface_input_transparent(state, win->overlay_surface);
+
+  wl_subsurface_set_position(win->overlay_subsurface, 0, 0);
+  wl_subsurface_set_desync(win->overlay_subsurface);
+}
+
+static void refresh_spotlight_overlay(struct wooz_window *win) {
+  int width = win->output->logical_geometry.width;
+  int height = win->output->logical_geometry.height;
+  double radius = (double)(width < height ? width : height) *
+                  win->state->spotlight_radius_frac;
+  draw_spotlight_overlay(win->overlay_buffer->data, width, height,
+                         (int)win->pointer_x, (int)win->pointer_y, radius);
+  wl_surface_attach(win->overlay_surface, win->overlay_buffer->wl_buffer, 0,
+                    0);
+  wl_surface_damage(win->overlay_surface, 0, 0, width, height);
+  wl_surface_commit(win->overlay_surface);
+}
+
+static void set_spotlight_overlay_visible(struct wooz_window *win, bool show) {
+  if (show == win->overlay_visible)
+    return;
+  win->overlay_visible = show;
+  if (show) {
+    refresh_spotlight_overlay(win);
+  } else {
+    wl_surface_attach(win->overlay_surface, NULL, 0, 0);
+    wl_surface_damage(win->overlay_surface, 0, 0,
+                      win->output->logical_geometry.width,
+                      win->output->logical_geometry.height);
+    wl_surface_commit(win->overlay_surface);
+  }
+}
+
+static void update_spotlight_overlay(struct wooz_window *win) {
+  if (!win->overlay_surface)
+    return;
+  bool zoomed = win->view_source.width < win->initial_view_source.width - 0.5;
+  set_spotlight_overlay_visible(win,
+                                zoomed && win->state->spotlight_enabled);
+}
+
+static void refresh_visible_spotlight_overlays(struct wooz_state *state) {
+  struct wooz_window *win;
+
+  wl_list_for_each(win, &state->windows, link) {
+    if (win->overlay_visible)
+      refresh_spotlight_overlay(win);
+  }
+}
+
+static void update_spotlight_overlays(struct wooz_state *state) {
+  struct wooz_window *win;
+
+  wl_list_for_each(win, &state->windows, link) {
+    if (win->overlay_surface)
+      update_spotlight_overlay(win);
+  }
+}
+
 static void render_window(struct wooz_window *win) {
   win->view_source.width =
       max(min(win->view_source.width, win->output->buffer->width),
@@ -87,6 +195,7 @@ static void render_window(struct wooz_window *win) {
                          wl_fixed_from_double(win->view_source.height));
 
   wl_surface_commit(win->surface);
+  update_spotlight_overlay(win);
 }
 
 static void handle_key_action(struct wooz_state *state, uint32_t key) {
@@ -133,6 +242,28 @@ static void handle_key_action(struct wooz_state *state, uint32_t key) {
     win->view_source.y += KEYBOARD_PAN_STEP;
     render_window(win);
     break;
+
+  case KEY_LEFTBRACE:
+    {
+      double previous = state->spotlight_radius_frac;
+      state->spotlight_radius_frac =
+        max(SPOTLIGHT_RADIUS_MIN,
+            state->spotlight_radius_frac - SPOTLIGHT_RADIUS_STEP);
+      if (state->spotlight_radius_frac != previous)
+        refresh_visible_spotlight_overlays(state);
+    }
+    break;
+
+  case KEY_RIGHTBRACE:
+    {
+      double previous = state->spotlight_radius_frac;
+      state->spotlight_radius_frac =
+        min(SPOTLIGHT_RADIUS_MAX,
+            state->spotlight_radius_frac + SPOTLIGHT_RADIUS_STEP);
+      if (state->spotlight_radius_frac != previous)
+        refresh_visible_spotlight_overlays(state);
+    }
+    break;
   }
 }
 
@@ -166,7 +297,8 @@ static void start_key_repeat(struct wooz_state *state, uint32_t key) {
 static bool is_repeatable_key(uint32_t key) {
   return key == KEY_EQUAL || key == KEY_KPPLUS || key == KEY_MINUS ||
          key == KEY_KPMINUS || key == KEY_LEFT || key == KEY_RIGHT ||
-         key == KEY_UP || key == KEY_DOWN;
+         key == KEY_UP || key == KEY_DOWN || key == KEY_LEFTBRACE ||
+         key == KEY_RIGHTBRACE;
 }
 
 static void screencopy_frame_handle_buffer(
@@ -518,6 +650,8 @@ static void pointer_handle_motion(void *data, struct wl_pointer *pointer,
 
   double x = wl_fixed_to_double(sx);
   double y = wl_fixed_to_double(sy);
+  double ddx = x - win->pointer_x;
+  double ddy = y - win->pointer_y;
 
   if (win->pointer_pressed) {
     double scale = win->view_source.width / win->output->logical_geometry.width;
@@ -546,6 +680,10 @@ static void pointer_handle_motion(void *data, struct wl_pointer *pointer,
 
   win->pointer_x = x;
   win->pointer_y = y;
+
+  if (win->overlay_visible &&
+      ddx * ddx + ddy * ddy >= SPOTLIGHT_MOVE_THRESHOLD_SQ)
+    refresh_spotlight_overlay(win);
 }
 
 static void pointer_handle_button(void *data, struct wl_pointer *pointer,
@@ -662,6 +800,12 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *keyboard,
     render_window(win);
     break;
 
+  case KEY_S:
+    // Toggle spotlight (no repeat)
+    state->spotlight_enabled = !state->spotlight_enabled;
+    update_spotlight_overlays(state);
+    break;
+
   case KEY_EQUAL: // For keyboards where + is shift+=
   case KEY_KPPLUS:
   case KEY_MINUS:
@@ -670,6 +814,8 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *keyboard,
   case KEY_RIGHT:
   case KEY_UP:
   case KEY_DOWN:
+  case KEY_LEFTBRACE:
+  case KEY_RIGHTBRACE:
     // Handle the key action immediately
     handle_key_action(state, key);
     // Start key repeat for these keys
@@ -739,6 +885,9 @@ static void handle_global(void *data, struct wl_registry *registry,
   if (strcmp(interface, wl_compositor_interface.name) == 0) {
     state->compositor =
         wl_registry_bind(registry, name, &wl_compositor_interface, 5);
+  } else if (strcmp(interface, wl_subcompositor_interface.name) == 0) {
+    state->subcompositor =
+        wl_registry_bind(registry, name, &wl_subcompositor_interface, 1);
   } else if (strcmp(interface, wl_shm_interface.name) == 0) {
     state->shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
   } else if (strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
@@ -791,6 +940,7 @@ static const char usage[] =
     "  --zoom-in PERCENT       Set initial zoom percentage (e.g., '10%', "
     "'50%')\n"
     "  --invert-scroll         Invert scroll direction (scroll up zooms in)\n"
+    "  --spotlight             Dim screen outside a circle when zoomed\n"
     "\n"
     "Controls:\n"
     "  Mouse scroll            Zoom in/out at mouse position\n"
@@ -800,6 +950,8 @@ static const char usage[] =
     "  +/-                     Zoom in/out at center\n"
     "  Arrow keys              Pan the view\n"
     "  0                       Restore/unzoom\n"
+    "  s                       Toggle spotlight dim overlay\n"
+    "  [ / ]                   Decrease/increase spotlight radius\n"
     "  Esc                     Exit (default)\n";
 
 static bool should_include_output(struct wooz_output *output,
@@ -839,6 +991,7 @@ int main(int argc, char *argv[]) {
       {"output", required_argument, 0, 'o'},
       {"zoom-in", required_argument, 0, 'z'},
       {"invert-scroll", no_argument, 0, 'i'},
+      {"spotlight", no_argument, 0, 's'},
       {0, 0, 0, 0}};
 
   int opt;
@@ -882,6 +1035,9 @@ int main(int argc, char *argv[]) {
     case 'i':
       config.invert_scroll = true;
       break;
+    case 's':
+      config.spotlight = true;
+      break;
     default:
       fprintf(stderr, "%s", usage);
       return EXIT_FAILURE;
@@ -890,6 +1046,8 @@ int main(int argc, char *argv[]) {
 
   struct wooz_state state = {0};
   state.config = config;
+  state.spotlight_enabled = config.spotlight;
+  state.spotlight_radius_frac = SPOTLIGHT_RADIUS_DEFAULT;
   state.repeat_timer_fd = -1;
   wl_list_init(&state.outputs);
   wl_list_init(&state.windows);
@@ -1028,7 +1186,11 @@ int main(int argc, char *argv[]) {
     xdg_toplevel_set_title(win->xdg_toplevel, "wooz");
     xdg_toplevel_set_fullscreen(win->xdg_toplevel, output->wl_output);
 
+    win->pointer_x = output->logical_geometry.width / 2.0;
+    win->pointer_y = output->logical_geometry.height / 2.0;
+
     wl_surface_commit(win->surface);
+    create_spotlight_overlay(win);
   }
 
   state.n_done = 1;

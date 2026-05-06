@@ -14,10 +14,12 @@ struct wooz_config {
   double initial_zoom; // Initial zoom percentage (0.0 = no zoom, 0.1 = 10%)
   char *output_filter; // Filter to specific output name (NULL = all outputs)
   bool invert_scroll; // Invert scroll direction (scroll up zooms in)
+  bool spotlight;     // Show spotlight overlay when zoomed
 };
 
 struct wooz_state {
   struct wl_compositor *compositor;
+  struct wl_subcompositor *subcompositor;
   struct xdg_wm_base *shell;
   struct wl_display *display;
   struct wl_registry *registry;
@@ -33,6 +35,9 @@ struct wooz_state {
 
   struct wooz_window *focused;
   struct wooz_config config;
+
+  bool spotlight_enabled;
+  double spotlight_radius_frac; // fraction of min(width,height), default 0.25
 
   // Key repeat state
   uint32_t pressed_key;
@@ -72,6 +77,11 @@ struct wooz_window {
   struct xdg_surface *xdg_surface;
   struct wp_viewport *viewport;
   struct wl_surface *surface;
+
+  struct wl_surface *overlay_surface;
+  struct wl_subsurface *overlay_subsurface;
+  struct wooz_buffer *overlay_buffer;
+  bool overlay_visible;
 
   // Viewport source rectangle.
   struct wooz_boxf view_source;
