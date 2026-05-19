@@ -15,7 +15,7 @@
 #include "viewporter-protocol.h"
 #include "wlr-screencopy-unstable-v1-protocol.h"
 #include "xdg-output-unstable-v1-protocol.h"
-#include "xdg-shell-protocol.h"
+#include "wlr-layer-shell-unstable-v1-protocol.h"
 
 // Key codes from linux/input-event-codes.h
 #define KEY_ESC 1
@@ -309,41 +309,23 @@ static const struct wl_output_listener output_listener = {
     .scale = output_handle_scale,
 };
 
-static void xdg_wm_base_ping(void *data, struct xdg_wm_base *shell,
-                             uint32_t serial) {
-  xdg_wm_base_pong(shell, serial);
-}
-
-static const struct xdg_wm_base_listener xdg_wm_base_listener = {
-    .ping = &xdg_wm_base_ping,
-};
-
-static void xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
-                                  uint32_t serial) {
+static void layer_surface_configure(void *data,
+                                    struct zwlr_layer_surface_v1 *surface,
+                                    uint32_t serial,
+                                    uint32_t width, uint32_t height) {
   struct wooz_window *win = data;
 
   wl_surface_set_buffer_transform(win->surface, win->output->transform);
   win->is_configured = true;
-  win->is_maximized = win->configure.is_maximized;
-  win->is_fullscreen = win->configure.is_fullscreen;
-  win->is_resizing = win->configure.is_resizing;
-  win->is_tiled_top = win->configure.is_tiled_top;
-  win->is_tiled_bottom = win->configure.is_tiled_bottom;
-  win->is_tiled_left = win->configure.is_tiled_left;
-  win->is_tiled_right = win->configure.is_tiled_right;
-  win->is_tiled = win->is_tiled_top || win->is_tiled_bottom ||
-                  win->is_tiled_left || win->is_tiled_right;
 
-  xdg_surface_ack_configure(win->xdg_surface, serial);
+  zwlr_layer_surface_v1_ack_configure(surface, serial);
   wl_surface_attach(win->surface, win->output->buffer->wl_buffer, 0, 0);
 
-  if (win->viewport != NULL && win->configure.width != 0 &&
-      win->configure.height != 0) {
-    wp_viewport_set_destination(win->viewport, win->configure.width,
-                                win->configure.height);
+  if (win->viewport != NULL && width != 0 && height != 0) {
+    wp_viewport_set_destination(win->viewport, (int)width, (int)height);
   }
 
-  // Apply initial zoom on first configure
+  // Apply initial zoom once, on the first configure event
   if (!win->initial_zoom_applied && win->state->config.initial_zoom > 0.0) {
     double center_x = win->output->logical_geometry.width / 2.0;
     double center_y = win->output->logical_geometry.height / 2.0;
@@ -352,132 +334,21 @@ static void xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
     apply_zoom(win, zoom_pixels, center_x, center_y);
     render_window(win);
     win->initial_zoom_applied = true;
-    return; // render_window already calls wl_surface_commit
+    return;
   }
 
   wl_surface_commit(win->surface);
 }
 
-static const struct xdg_surface_listener xdg_surface_listener = {
-    .configure = &xdg_surface_configure,
-};
-
-static void xdg_toplevel_configure(void *data,
-                                   struct xdg_toplevel *xdg_toplevel,
-                                   int32_t width, int32_t height,
-                                   struct wl_array *states) {
-  bool is_activated = false;
-  bool is_fullscreen = false;
-  bool is_maximized = false;
-  bool is_resizing = false;
-  bool is_tiled_top = false;
-  bool is_tiled_bottom = false;
-  bool is_tiled_left = false;
-  bool is_tiled_right = false;
-  bool is_suspended = false;
-
-  enum xdg_toplevel_state *state;
-  wl_array_for_each(state, states) {
-    switch (*state) {
-    case XDG_TOPLEVEL_STATE_MAXIMIZED:
-      is_maximized = true;
-      break;
-    case XDG_TOPLEVEL_STATE_FULLSCREEN:
-      is_fullscreen = true;
-      break;
-    case XDG_TOPLEVEL_STATE_RESIZING:
-      is_resizing = true;
-      break;
-    case XDG_TOPLEVEL_STATE_ACTIVATED:
-      is_activated = true;
-      break;
-    case XDG_TOPLEVEL_STATE_TILED_LEFT:
-      is_tiled_left = true;
-      break;
-    case XDG_TOPLEVEL_STATE_TILED_RIGHT:
-      is_tiled_right = true;
-      break;
-    case XDG_TOPLEVEL_STATE_TILED_TOP:
-      is_tiled_top = true;
-      break;
-    case XDG_TOPLEVEL_STATE_TILED_BOTTOM:
-      is_tiled_bottom = true;
-      break;
-    case XDG_TOPLEVEL_STATE_SUSPENDED:
-      is_suspended = true;
-      break;
-    default:
-      break;
-    }
-  }
-
-  (void)is_suspended;
-
-  /*
-   * Changes done here are ignored until the configure event has
-   * been ack:ed in xdg_surface_configure().
-   *
-   * So, just store the config data and apply it later, in
-   * xdg_surface_configure() after we've ack:ed the event.
-   */
-  struct wooz_window *win = data;
-  win->configure.is_activated = is_activated;
-  win->configure.is_fullscreen = is_fullscreen;
-  win->configure.is_maximized = is_maximized;
-  win->configure.is_resizing = is_resizing;
-  win->configure.is_tiled_top = is_tiled_top;
-  win->configure.is_tiled_bottom = is_tiled_bottom;
-  win->configure.is_tiled_left = is_tiled_left;
-  win->configure.is_tiled_right = is_tiled_right;
-  win->configure.width = width;
-  win->configure.height = height;
-}
-
-static void xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel) {
+static void layer_surface_closed(void *data,
+                                 struct zwlr_layer_surface_v1 *surface) {
   struct wooz_window *win = data;
   win->state->n_done = 0;
 }
 
-static void xdg_toplevel_configure_bounds(void *data,
-                                          struct xdg_toplevel *xdg_toplevel,
-                                          int32_t width, int32_t height) {
-  /* TODO: ensure we don't pick a bigger size */
-}
-
-static void xdg_toplevel_wm_capabilities(void *data,
-                                         struct xdg_toplevel *xdg_toplevel,
-                                         struct wl_array *caps) {
-  struct wooz_window *win = data;
-
-  win->wm_capabilities.maximize = false;
-  win->wm_capabilities.minimize = false;
-  win->wm_capabilities.window_menu = false;
-  win->wm_capabilities.fullscreen = false;
-
-  enum xdg_toplevel_wm_capabilities *cap;
-  wl_array_for_each(cap, caps) {
-    switch (*cap) {
-    case XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE:
-      win->wm_capabilities.maximize = true;
-      break;
-    case XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE:
-      win->wm_capabilities.minimize = true;
-      break;
-    case XDG_TOPLEVEL_WM_CAPABILITIES_WINDOW_MENU:
-      win->wm_capabilities.window_menu = true;
-      break;
-    case XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN:
-      win->wm_capabilities.fullscreen = true;
-      break;
-    }
-  }
-}
-
-static const struct xdg_toplevel_listener xdg_toplevel_listener = {
-    .configure = &xdg_toplevel_configure,
-    .close = &xdg_toplevel_close,
-    .configure_bounds = &xdg_toplevel_configure_bounds,
-    .wm_capabilities = xdg_toplevel_wm_capabilities,
+static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
+    .configure = &layer_surface_configure,
+    .closed = &layer_surface_closed,
 };
 
 static void pointer_handle_enter(void *data, struct wl_pointer *pointer,
@@ -757,9 +628,9 @@ static void handle_global(void *data, struct wl_registry *registry,
              0) {
     state->screencopy_manager = wl_registry_bind(
         registry, name, &zwlr_screencopy_manager_v1_interface, 1);
-  } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
-    state->shell = wl_registry_bind(registry, name, &xdg_wm_base_interface, 1);
-    xdg_wm_base_add_listener(state->shell, &xdg_wm_base_listener, state);
+  } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
+    state->layer_shell = wl_registry_bind(registry, name,
+                                          &zwlr_layer_shell_v1_interface, 4);
   } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
     state->viewporter =
         wl_registry_bind(registry, name, &wp_viewporter_interface, 1);
@@ -911,8 +782,8 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "wl_compositor is missing\n");
     return EXIT_FAILURE;
   }
-  if (state.shell == NULL) {
-    fprintf(stderr, "no XDG shell interface\n");
+  if (state.layer_shell == NULL) {
+    fprintf(stderr, "compositor doesn't support wlr-layer-shell\n");
     return EXIT_FAILURE;
   }
   if (state.shm == NULL) {
@@ -1020,13 +891,19 @@ int main(int argc, char *argv[]) {
       return EXIT_FAILURE;
     }
 
-    win->xdg_surface = xdg_wm_base_get_xdg_surface(state.shell, win->surface);
-    xdg_surface_add_listener(win->xdg_surface, &xdg_surface_listener, win);
-    win->xdg_toplevel = xdg_surface_get_toplevel(win->xdg_surface);
-    xdg_toplevel_add_listener(win->xdg_toplevel, &xdg_toplevel_listener, win);
-    xdg_toplevel_set_app_id(win->xdg_toplevel, "dev.negrel.wooz");
-    xdg_toplevel_set_title(win->xdg_toplevel, "wooz");
-    xdg_toplevel_set_fullscreen(win->xdg_toplevel, output->wl_output);
+    win->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
+        state.layer_shell, win->surface, output->wl_output,
+        ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "wooz");
+    zwlr_layer_surface_v1_set_anchor(win->layer_surface,
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+    zwlr_layer_surface_v1_set_keyboard_interactivity(win->layer_surface,
+        ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
+    zwlr_layer_surface_v1_set_exclusive_zone(win->layer_surface, -1);
+    zwlr_layer_surface_v1_add_listener(win->layer_surface,
+        &layer_surface_listener, win);
 
     wl_surface_commit(win->surface);
   }
@@ -1088,10 +965,8 @@ int main(int argc, char *argv[]) {
 
     // Free window.
     wl_list_remove(&win->link);
-    if (win->xdg_toplevel != NULL)
-      xdg_toplevel_destroy(win->xdg_toplevel);
-    if (win->xdg_surface != NULL)
-      xdg_surface_destroy(win->xdg_surface);
+    if (win->layer_surface != NULL)
+      zwlr_layer_surface_v1_destroy(win->layer_surface);
     if (win->viewport != NULL)
       wp_viewport_destroy(win->viewport);
     if (win->surface != NULL)
@@ -1123,7 +998,7 @@ int main(int argc, char *argv[]) {
     wl_keyboard_release(state.keyboard);
   }
   wl_seat_release(state.seat);
-  xdg_wm_base_destroy(state.shell);
+  zwlr_layer_shell_v1_destroy(state.layer_shell);
   wp_viewporter_destroy(state.viewporter);
   wl_shm_destroy(state.shm);
   wl_registry_destroy(state.registry);

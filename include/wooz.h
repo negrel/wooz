@@ -18,7 +18,7 @@ struct wooz_config {
 
 struct wooz_state {
   struct wl_compositor *compositor;
-  struct xdg_wm_base *shell;
+  struct zwlr_layer_shell_v1 *layer_shell;
   struct wl_display *display;
   struct wl_registry *registry;
   struct wl_shm *shm;
@@ -68,8 +68,7 @@ struct wooz_window {
   struct wooz_output *output;
   struct wl_list link;
 
-  struct xdg_toplevel *xdg_toplevel;
-  struct xdg_surface *xdg_surface;
+  struct zwlr_layer_surface_v1 *layer_surface;
   struct wp_viewport *viewport;
   struct wl_surface *surface;
 
@@ -86,36 +85,9 @@ struct wooz_window {
   uint32_t last_click_time;
   uint32_t last_click_button;
 
-  struct {
-    bool maximize : 1;
-    bool minimize : 1;
-    bool window_menu : 1;
-    bool fullscreen : 1;
-  } wm_capabilities;
-
   bool is_focused;
   bool is_configured;
-  bool is_fullscreen;
-  bool is_maximized;
-  bool is_resizing;
-  bool is_tiled_top;
-  bool is_tiled_bottom;
-  bool is_tiled_left;
-  bool is_tiled_right;
-  bool is_tiled; /* At least one of is_tiled_{top,bottom,left,right} is true */
   bool initial_zoom_applied;
-  struct {
-    int width;
-    int height;
-    bool is_activated : 1;
-    bool is_fullscreen : 1;
-    bool is_maximized : 1;
-    bool is_resizing : 1;
-    bool is_tiled_top : 1;
-    bool is_tiled_bottom : 1;
-    bool is_tiled_left : 1;
-    bool is_tiled_right : 1;
-  } configure;
 };
 
 #endif
