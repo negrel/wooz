@@ -23,6 +23,7 @@ protocols = [
 	wl_protocol_dir / 'staging/fractional-scale/fractional-scale-v1.xml',
 	wl_protocol_dir / 'stable/viewporter/viewporter.xml',
 	'wlr-screencopy-unstable-v1.xml',
+	'wlr-layer-shell-unstable-v1.xml',
 ]
 
 protocols_src = []
